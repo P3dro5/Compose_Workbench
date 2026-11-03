@@ -1,0 +1,10 @@
+<idea-plugin>
+  <id>dev.composeworkbench</id>
+  <name>Compose Workbench</name>
+  <vendor>Compose Workbench</vendor>
+  <description>Inspect, diagnose, repair and verify Jetpack Compose touch-target and accessibility issues.</description>
+  <depends>com.intellij.modules.platform</depends>
+  <extensions defaultExtensionNs="com.intellij">
+    <toolWindow id="Compose Workbench" anchor="right" factoryClass="dev.composeworkbench.plugin.WorkbenchToolWindowFactory"/>
+  </extensions>
+</idea-plugin>

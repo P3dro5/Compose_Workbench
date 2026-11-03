@@ -1,0 +1,10 @@
+# Project exclude paths
+/.gradle/
+/build/
+/sample-app/build/
+/workbench-core/build/
+/workbench-core/build/classes/kotlin/main/
+/workbench-plugin/build/
+/workbench-plugin/build/classes/kotlin/main/
+/workbench-ui/build/
+/workbench-ui/build/classes/kotlin/main/

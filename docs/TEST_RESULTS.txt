@@ -1,0 +1,52 @@
+PASS  analyzer: demo source yields small-target and adjacent findings for 'favorite'
+PASS  analyzer: 48dp+ and minimumInteractiveComponentSize are not flagged
+PASS  analyzer: comments and strings are ignored
+PASS  analyzer: padding before clickable flagged; after is not
+PASS  analyzer: clickable Icon with null contentDescription flagged
+PASS  analyzer: finding ids are stable and sequential
+PASS  proposals: every kind yields a distinct, finding-specific proposal with a diff
+PASS  proposals: generating a proposal never writes the file
+PASS  proposals: small-target patch inserts minimumInteractiveComponentSize and import
+PASS  proposals: padding/clickable reorder swaps exactly those calls
+PASS  patch: applies to file, preserving unrelated edits made above the target
+PASS  patch: stale source fails and leaves the file byte-identical
+PASS  diff: unified diff marks removed and added lines
+PASS  matrix: 7 probes x 4 font scales = 28 cases per finding, unique keys
+PASS  geometry: probe coordinates are inside bounds; outside probe is outside
+PASS  summary: verdict logic
+PASS  engine: unavailable engine reports 28 NOT_RUN, never PASS
+PASS  engine: results file import maps entries and marks missing cases NOT_RUN
+PASS  workflow: demo findings are labelled demo and carry demo evidence note
+PASS  workflow: suggest fix -> Repair, awaiting approval, file untouched
+PASS  workflow: approve -> Verify, does NOT modify file, patch NOT_APPLIED, verification NOT_RUN, not resolved
+PASS  workflow: reject -> Diagnose, file untouched, not approved
+PASS  workflow: cannot approve without a proposal; cannot apply patch without approval
+PASS  workflow: apply approved patch writes file; resets verification; still not resolved
+PASS  workflow: failed patch application is reported, file unchanged, state FAILED, never resolved
+PASS  verify: unavailable engine -> 'Verification not run', never resolved
+PASS  verify: demo ALL_PASS resolves a DEMO finding only, labelled as demo data
+PASS  verify: demo fixture can NOT verify a real (non-demo) finding
+PASS  verify: illustrated failures -> CW-001 fails at 1.5x right edge, CW-002 fails at 2.0x corners, others pass
+PASS  verify: partial run is inconclusive and not resolved; history preserved
+PASS  verify: runs before approval are baseline evidence and do not change verification state
+PASS  workflow: findings are independent (approving CW-001 does not touch CW-002)
+PASS  workflow: reset clears state but warns that patched files are not reverted
+PASS  workflow: listeners are notified on transitions
+PASS  spec Scenario D: approve two findings, verify one -> other stays 'Approved · Awaiting verification'; separate proposals and histories
+PASS  spec Scenario F: complete batch = 28 executed; partial batch reported incomplete with exact counts
+PASS  spec Scenario E: failing engine (exception) is recorded as 28 NOT_RUN, not resolved
+PASS  workflow: failed check keeps issue unresolved even after a previous pass in history
+PASS  ui: demo banner is shown and stage indicator lists four stages in order
+PASS  ui: Verify card has NO 'Back to Repair' control (any component, any text)
+PASS  ui: stage indicator is display-only (labels, not buttons)
+PASS  ui: Diagnose -> Suggest fix opens Repair with proposal, diff and enabled Approve/Reject
+PASS  ui: spec Scenario A - approve without verification returns to Verify with awaiting-verification status
+PASS  ui: spec Scenario C (labelled fixture) - verification failure shown, not resolved, 28 result rows
+PASS  ui: Reject returns to Diagnose and Verify never shows approval
+PASS  ui: Reset workflow returns to Inspect
+PASS  ui: spec Scenario E - real mode with no results reports 'Verification not run' (no fabricated pass)
+PASS  ui: spec Scenario F - partial batch is shown as INCOMPLETE with accurate counts; verdict not passed
+PASS  ui: results table shows finding id, target and coordinates for every executed case
+PASS  ui: Repair screen shows finding id, explanation, evidence (heuristic + not-run), location, proposal and rationale
+
+50 tests executed, 50 passed, 0 failed
