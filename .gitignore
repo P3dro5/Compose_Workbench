@@ -8,3 +8,9 @@
 /workbench-plugin/build/classes/kotlin/main/
 /workbench-ui/build/
 /workbench-ui/build/classes/kotlin/main/
+
+# JVM heap dumps (can be hundreds of MB)
+*.hprof
+
+# macOS
+.DS_Store
