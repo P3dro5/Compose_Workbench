@@ -7,6 +7,13 @@ import java.nio.file.StandardCopyOption
 /** One text edit. [before]/[after] are context used to re-locate the edit if the file shifted. */
 data class Edit(val start: Int, val end: Int, val original: String, val replacement: String, val before: String, val after: String)
 
+/** A suggested manual fix with before/after code examples. */
+data class SuggestedFix(
+    val description: String,
+    val beforeCode: String,
+    val afterCode: String
+)
+
 /** [guards]: texts that must each still occur exactly once in the file, proving the targeted code was not changed. */
 data class Patch(val file: String, val edits: List<Edit>, val guards: List<String> = emptyList())
 
@@ -19,7 +26,13 @@ data class Proposal(
     val patch: Patch?,
     val diff: String,
     val requiresHumanInput: Boolean,
-    val notes: List<String>
+    val notes: List<String>,
+    /** Suggested manual fixes with before/after code examples. */
+    val suggestedFixes: List<SuggestedFix> = emptyList(),
+    /** Possible side effects or behavior changes. */
+    val risks: List<String> = emptyList(),
+    /** Scenario IDs that must be rerun after applying this repair. */
+    val verificationScenarioIds: List<String> = emptyList()
 ) {
     val autoApplicable get() = patch != null
 }
@@ -164,26 +177,43 @@ object ProposalGenerator {
         }
     }
 
-    private fun manual(f: Finding, summary: String, why: String, rationale: String, notes: List<String>) = Proposal(
-        f.id, summary, f.explanation, rationale, null, "(no automatic patch — see notes)", false, notes + why)
+    private fun manual(f: Finding, summary: String, why: String, rationale: String, notes: List<String>,
+                       risks: List<String> = emptyList(), verificationScenarioIds: List<String> = emptyList(),
+                       suggestedFixes: List<SuggestedFix> = emptyList()) = Proposal(
+        f.id, summary, f.explanation, rationale, null, "(no automatic patch — see notes)", false, notes + why,
+        suggestedFixes, risks, verificationScenarioIds)
 
     fun generate(f: Finding, source: String): Proposal {
         val code = SourceAnalyzer.blankComments(source)
         val chain = if (f.chainStart >= 0) SourceAnalyzer.parseChain(code, f.chainStart) else null
         val iCall = chain?.calls?.firstOrNull { it.name in SourceAnalyzer.INTERACTIVE }
 
-        fun finish(summary: String, rationale: String, edits: List<Edit>, human: Boolean, notes: List<String>, guards: List<String> = emptyList()): Proposal {
+        fun finish(summary: String, rationale: String, edits: List<Edit>, human: Boolean, notes: List<String>,
+                   guards: List<String> = emptyList(), risks: List<String> = emptyList(),
+                   verificationScenarioIds: List<String> = emptyList(),
+                   suggestedFixes: List<SuggestedFix> = emptyList()): Proposal {
             val patch = Patch(f.location.file, edits, guards)
             val r = PatchApplier.applyToText(source, patch)
-            return if (!r.success) manual(f, summary, "The patch could not be generated reliably against the current source: ${r.message}", rationale, notes)
-            else Proposal(f.id, summary, f.explanation, rationale, patch, DiffRenderer.unified(f.location.file, source, r.newText!!), human, notes)
+            return if (!r.success) manual(f, summary, "The patch could not be generated reliably against the current source: ${r.message}", rationale, notes, risks, verificationScenarioIds, suggestedFixes)
+            else Proposal(f.id, summary, f.explanation, rationale, patch, DiffRenderer.unified(f.location.file, source, r.newText!!), human, notes,
+                suggestedFixes, risks, verificationScenarioIds)
         }
 
         return when (f.kind) {
             FindingKind.SMALL_TOUCH_TARGET -> {
                 if (chain == null || iCall == null) return manual(f, "Enlarge the touch target of '${f.targetName}'",
                     "The modifier chain at line ${f.location.line} no longer matches the finding.",
-                    "Use minimumInteractiveComponentSize so the interactive region is at least 48x48dp.", emptyList())
+                    "Use minimumInteractiveComponentSize so the interactive region is at least 48x48dp.", emptyList(),
+                    risks = listOf("Layout bounds can grow to 48dp; review adjacent spacing.",
+                        "Adding the modifier does not prove the target is correct: run verification after applying."),
+                    verificationScenarioIds = emptyList(),
+                    suggestedFixes = listOf(
+                        SuggestedFix(
+                            "Add minimumInteractiveComponentSize to make the target at least 48x48dp",
+                            ".size(24.dp).clickable { onFavorite() }",
+                            ".size(24.dp).minimumInteractiveComponentSize().clickable { onFavorite() }"
+                        )
+                    ))
                 val edits = listOfNotNull(edit(source, chain.tokenEnd, chain.tokenEnd, ".minimumInteractiveComponentSize()"), importEdit(source, M3_IMPORT))
                 finish("Enlarge the touch target of '${f.targetName}' to at least 48x48dp",
                     "`minimumInteractiveComponentSize()` placed first in the chain makes the layout and hit-test area at least 48dp, " +
@@ -192,7 +222,17 @@ object ProposalGenerator {
                     listOf("Assumes Material 3. With Material 2 use androidx.compose.material.minimumInteractiveComponentSize (newer versions only).",
                         "The element's layout bounds can grow to 48dp; review spacing next to it.",
                         "Adding the modifier does not prove the target is correct: run verification after applying."),
-                    listOf(source.substring(chain.start, chain.end)))
+                    listOf(source.substring(chain.start, chain.end)),
+                    risks = listOf("Element's layout bounds can grow to 48dp; review spacing next to it.",
+                        "Adding the modifier does not prove the target is correct: run verification after applying."),
+                    verificationScenarioIds = emptyList(),
+                    suggestedFixes = listOf(
+                        SuggestedFix(
+                            "Add minimumInteractiveComponentSize to make the target at least 48x48dp",
+                            ".size(24.dp).clickable { onFavorite() }",
+                            ".size(24.dp).minimumInteractiveComponentSize().clickable { onFavorite() }"
+                        )
+                    ))
             }
             FindingKind.CLICKABLE_BEFORE_PADDING -> {
                 val idx = chain?.calls?.indexOfFirst { it.name in SourceAnalyzer.INTERACTIVE } ?: -1
@@ -200,7 +240,16 @@ object ProposalGenerator {
                 if (chain == null || pad == null || pad.name != "padding") return manual(f, "Reorder padding and clickable on '${f.targetName}'",
                     "`padding` is not directly before the interactive modifier, so reordering would also move other modifiers.",
                     "Place `.padding(...)` after the interactive modifier so the padded area is clickable.",
-                    listOf("Move the `.padding(...)` call to just after `.${chain?.calls?.getOrNull(idx)?.name ?: "clickable"}` by hand and review the visual result."))
+                    listOf("Move the `.padding(...)` call to just after `.${chain?.calls?.getOrNull(idx)?.name ?: "clickable"}` by hand and review the visual result."),
+                    risks = listOf("If the padding was a deliberate outer margin, reject this proposal."),
+                    verificationScenarioIds = emptyList(),
+                    suggestedFixes = listOf(
+                        SuggestedFix(
+                            "Move clickable before padding",
+                            "Modifier.padding(8.dp).clickable { }",
+                            "Modifier.clickable { }.padding(8.dp)"
+                        )
+                    ))
                 val c = chain.calls[idx]
                 val gap = source.substring(pad.end, c.start)
                 val original = source.substring(pad.start, c.end)
@@ -214,24 +263,108 @@ object ProposalGenerator {
             FindingKind.ADJACENT_CLICKABLES -> {
                 if (chain == null) return manual(f, "Separate '${f.targetName}' from its neighbour",
                     "The modifier chain at line ${f.location.line} no longer matches the finding.",
-                    "Add spacing so the touch regions do not meet.", emptyList())
+                    "Add spacing so the touch regions do not meet.", emptyList(),
+                    risks = listOf("Spacing alone does not guarantee each target is >=48dp: run verification and consider the touch-target finding as well."),
+                    verificationScenarioIds = emptyList(),
+                    suggestedFixes = listOf(
+                        SuggestedFix(
+                            "Add horizontal padding to separate touch regions",
+                            ".clickable { }",
+                            ".clickable { }.padding(horizontal = 8.dp)"
+                        )
+                    ))
                 val edits = listOfNotNull(edit(source, chain.tokenEnd, chain.tokenEnd, ".padding(horizontal = 8.dp)"), importEdit(source, PADDING_IMPORT))
                 finish("Add spacing between '${f.targetName}' and the adjacent interactive target",
                     "An outer 8dp horizontal margin keeps the two click regions from touching, so a tap on the shared edge is not ambiguous.",
                     edits, false,
                     listOf("This shifts '${f.targetName}' by 8dp on each side; alternatively use Arrangement.spacedBy(8.dp) on the parent Row.",
                         "Spacing alone does not guarantee each target is >=48dp: run verification and consider the touch-target finding as well."),
-                    listOf(source.substring(chain.start, chain.end)))
+                    listOf(source.substring(chain.start, chain.end)),
+                    risks = listOf("Spacing alone does not guarantee each target is >=48dp: run verification and consider the touch-target finding as well."),
+                    verificationScenarioIds = emptyList(),
+                    suggestedFixes = listOf(
+                        SuggestedFix(
+                            "Add horizontal padding to separate touch regions",
+                            ".clickable { }",
+                            ".clickable { }.padding(horizontal = 8.dp)"
+                        )
+                    ))
             }
             FindingKind.MISSING_CONTENT_DESCRIPTION -> {
                 if (source.substring(f.location.startOffset.coerceAtMost(source.length), f.location.endOffset.coerceAtMost(source.length)) != f.snippet)
                     return manual(f, "Add a content description to '${f.targetName}'", "The code at line ${f.location.line} no longer matches the finding.",
-                        "Give the control an accessible name.", emptyList())
+                        "Give the control an accessible name.", emptyList(),
+                        risks = listOf("Approving this proposal does not make the control accessible until the placeholder is replaced."),
+                        verificationScenarioIds = emptyList(),
+                        suggestedFixes = listOf(
+                            SuggestedFix(
+                                "Add contentDescription with a meaningful label",
+                                "contentDescription = null",
+                                "contentDescription = \"Add to favorites\""
+                            )
+                        ))
                 finish("Add a content description to '${f.targetName}'",
                     "A clickable element needs an accessible name so TalkBack can announce its action.",
                     listOf(edit(source, f.location.startOffset, f.location.endOffset, "contentDescription = \"TODO: describe this action\"")), true,
                     listOf("The inserted text is a placeholder. Replace it with a localized string resource (stringResource(...)) before shipping.",
-                        "Approving this proposal does not make the control accessible until the placeholder is replaced."))
+                        "Approving this proposal does not make the control accessible until the placeholder is replaced."),
+                    risks = listOf("The inserted text is a placeholder. Replace it with a localized string resource (stringResource(...)) before shipping.",
+                        "Approving this proposal does not make the control accessible until the placeholder is replaced."),
+                    verificationScenarioIds = emptyList(),
+                    suggestedFixes = listOf(
+                        SuggestedFix(
+                            "Add contentDescription with a meaningful label",
+                            "contentDescription = null",
+                            "contentDescription = \"Add to favorites\""
+                        )
+                    ))
+            }
+            FindingKind.TEXT_CLIPPING -> {
+                manual(f, "Add maxLines or overflow handling to '${f.targetName}'",
+                    "Text without maxLines or overflow may clip at larger font scales.",
+                    "Add `.maxLines(1)` or `.overflow(TextOverflow.Ellipsis)` to the Text modifier chain, " +
+                        "or wrap in a layout that constrains width appropriately.",
+                    emptyList(),
+                    risks = listOf("Truncating text may hide information; ensure the truncated form still conveys meaning.",
+                        "Consider using Tooltip or a secondary screen for the full text."),
+                    verificationScenarioIds = emptyList(),
+                    suggestedFixes = listOf(
+                        SuggestedFix(
+                            "Add maxLines and overflow to prevent clipping",
+                            "Text(text = \"Hello\")",
+                            "Text(text = \"Hello\", maxLines = 1, overflow = TextOverflow.Ellipsis)"
+                        )
+                    ))
+            }
+            FindingKind.LAYOUT_OVERFLOW -> {
+                manual(f, "Review fixed width on '${f.targetName}' for narrow screens",
+                    "Fixed width constraints may overflow at narrow window widths.",
+                    "Replace fixed width with fillMaxWidth(), wrapContentWidth(), or constraints that adapt to screen size.",
+                    emptyList(),
+                    risks = listOf("Removing fixed width may change layout on wider screens; verify at multiple breakpoints."),
+                    verificationScenarioIds = emptyList(),
+                    suggestedFixes = listOf(
+                        SuggestedFix(
+                            "Replace fixed width with adaptive constraint",
+                            "Modifier.width(400.dp)",
+                            "Modifier.fillMaxWidth()"
+                        )
+                    ))
+            }
+            FindingKind.COLOR_STATE_VISIBILITY -> {
+                manual(f, "Review color contrast for theme visibility",
+                    "Hardcoded colors may not meet accessibility contrast in light or dark themes.",
+                    "Use Material theme color tokens (MaterialTheme.colorScheme) instead of hardcoded Color values.",
+                    emptyList(),
+                    risks = listOf("Changing colors may affect brand identity; verify with design system guidelines."),
+                    verificationScenarioIds = emptyList(),
+                    suggestedFixes = listOf(
+                        SuggestedFix(
+                            "Replace hardcoded color with Material theme token",
+                            "Color(0xFF0000)",
+                            "MaterialTheme.colorScheme.primary"
+                        )
+                    ))
             }
         }
     }

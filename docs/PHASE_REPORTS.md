@@ -37,3 +37,62 @@ During development the suite ran 43 tests with 3 failures (analyzer treated stri
 
 ## Phase 7 — Documentation
 README, ARCHITECTURE, KNOWN_LIMITATIONS, this file, TEST_RESULTS, demo screenshots (`docs/screenshots`, demo data).
+
+---
+
+## File-by-file summary
+
+| File | Purpose |
+|---|---|
+| `sample-app/build.gradle.kts` | Android app module (AGP 8.5.2, Kotlin 2.1.10, Compose BOM 2024.09.03, compileSdk 35) |
+| `sample-app/src/main/AndroidManifest.xml` | Minimal manifest required by AGP |
+| `sample-app/src/main/kotlin/.../FavoriteCard.kt` | Sample Composable with two icons (FavoriteCard composable) |
+| `sample-app/src/androidTest/.../TouchTargetMatrixTest.kt` | Instrumented touch-target matrix test (written, not compiled/run) |
+| `workbench-core/build.gradle.kts` | Core module (Kotlin JVM, JDK 17 toolchain) |
+| `workbench-core/.../Models.kt` | `Stage`, `Severity`, `FindingKind`, `EvidenceKind`, `Evidence`, `SourceLocation`, `Finding` |
+| `workbench-core/.../Workflow.kt` | `IssueState`, `WorkflowStore` state machine; all transitions (suggestFix, approve, reject, applyApprovedPatch, runVerification, reset) |
+| `workbench-core/.../Verification.kt` | `Probe`, `FontScales`, `VerificationMatrix`, `VerificationEngine`, `ResultsFileEngine`, `DemoFixtureEngine`, `BatchSummary`, `VerificationRun` |
+| `workbench-core/.../Proposals.kt` | `Proposal`, `Patch`, `Edit`, `PatchResult`, `PatchApplier`, `DiffRenderer`, `ProposalGenerator` |
+| `workbench-core/.../SourceAnalyzer.kt` | Heuristic static analysis (4 rules: SMALL_TOUCH_TARGET, CLICKABLE_BEFORE_PADDING, ADJACENT_CLICKABLES, MISSING_CONTENT_DESCRIPTION) |
+| `workbench-core/.../DemoData.kt` | Demo findings CW-001/CW-002 (labelled illustrative) |
+| `workbench-ui/build.gradle.kts` | UI module (Kotlin JVM, JDK 17 toolchain) |
+| `workbench-ui/.../WorkbenchPanel.kt` | Four-stage Swing UI (Inspect, Diagnose, Repair, Verify); no Back-to-Repair button on Verify |
+| `workbench-ui/.../WorkbenchStoreHandle.kt` | UI facade over `WorkflowStore` |
+| `workbench-ui/.../WorkbenchLauncher.kt` | `WorkbenchFactory` (real/demo mode), standalone `main` |
+| `workbench-plugin/build.gradle.kts` | IntelliJ Platform plugin (JDK 21 toolchain, IntelliJ 2024.2) |
+| `workbench-plugin/.../WorkbenchToolWindowFactory.kt` | Tool window factory bridging to Swing panel |
+| `workbench-plugin/META-INF/plugin.xml` | Plugin descriptor |
+| `workbench-tests/build.gradle.kts` | Test harness module (application plugin) |
+| `workbench-tests/.../Harness.kt` | Dependency-free `Suite` test harness |
+| `workbench-tests/.../Main.kt` | Test entry point (`main` runs all registered tests) |
+| `workbench-tests/.../CoreTests.kt` | Analyzer, proposals, patch, matrix, geometry, summary, engine unit tests |
+| `workbench-tests/.../WorkflowTests.kt` | Workflow state-transition tests (25 tests) |
+| `workbench-tests/.../UiTests.kt` | Headless Swing UI tests (12 tests) |
+| `workbench-tests/.../Screenshots.kt` | Screenshot utility |
+| `settings.gradle.kts` | Root project settings + `pluginManagement` (google(), mavenCentral(), gradlePluginPortal()) |
+| `gradle.properties` | `android.useAndroidX=true`, `org.gradle.jvmargs` (-Xmx4g) |
+| `local.properties` | Android SDK location (not version-controlled) |
+| `scripts/build-and-test.sh` | Kotlin-based test runner (no Gradle required) |
+| `README.md` | Project overview, reality table, build/test/run instructions |
+| `docs/ARCHITECTURE.md` | Module architecture, workflow & state model, patch safety, verification matrix, Compose-version notes |
+| `docs/KNOWN_LIMITATIONS.md` | 10 documented limitations (no device builds, clipping not implemented, etc.) |
+| `docs/PHASE_REPORTS.md` | Per-phase outcomes, test counts, this file |
+| `docs/TEST_RESULTS.txt` | Full 50-test pass output |
+| `docs/screenshots/*.png` | Demo-mode UI screenshots (4 stages) |
+
+---
+
+## Next steps
+
+No implementation work remains. All seven phases of the Implementation Prompt are complete:
+
+- Phases 1–6: implementation complete, 50/50 tests passing, Gradle Android build successful.
+- Phase 7: documentation complete (this file, README, ARCHITECTURE, KNOWN_LIMITATIONS, TEST_RESULTS).
+
+If you want to extend the project beyond the Implementation Prompt, the remaining gaps are all environment/tooling related (not code):
+
+1. **Compile and run the instrumented test** (`TouchTargetMatrixTest.kt`) on a real Android device/emulator to produce real `results.tsv` output.
+2. **Compile and install the IntelliJ plugin** (`workbench-plugin`) — requires the IntelliJ Platform SDK and a compatible IDE version.
+3. **Replace `java.io` patch writes with IDE `WriteCommandAction`** when running inside IntelliJ, so the VFS refreshes automatically (documented limitation #7 in KNOWN_LIMITATIONS.md).
+4. **Implement clipping / parent-constraint analysis** (documented limitation #5).
+5. **Add JUnit migration** (documented limitation #4) if JUnit becomes available.

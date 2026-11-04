@@ -245,6 +245,63 @@ object SourceAnalyzer {
                     NOT_RUN))
         }
 
+        // 5. Text that may clip or overflow at larger font scales
+        for (m in Regex("""\bText\s*\(""").findAll(code)) {
+            val open = m.range.last
+            val close = matchClose(code, open); if (close < 0) continue
+            val call = code.substring(open, close + 1)
+            val hasMaxLines = Regex("""maxLines\s*=""").containsMatchIn(call)
+            val hasOverflow = Regex("""overflow\s*=""").containsMatchIn(call)
+            if (!hasMaxLines && !hasOverflow) {
+                val s = open; val e = close + 1
+                raw += Finding(
+                    id = "", kind = FindingKind.TEXT_CLIPPING,
+                    title = "Text may clip at larger font scales",
+                    severity = Severity.MEDIUM, targetName = "Text", location = loc(s, e),
+                    snippet = src.substring(s, e),
+                    explanation = "Text without maxLines or overflow handling may clip at larger font scales, " +
+                        "making content unreadable or hiding important information.",
+                    evidence = listOf(
+                        Evidence(EvidenceKind.HEURISTIC, "Text call at line ${lineOf(src, s)} has no maxLines or overflow parameter."),
+                        NOT_RUN))
+            }
+        }
+
+        // 6. Layout with fixed width that may overflow at narrow widths
+        for (m in Regex("""\b(Row|Column|Box)\s*\(""").findAll(code)) {
+            val open = m.range.last
+            val close = matchClose(code, open); if (close < 0) continue
+            val call = code.substring(open, close + 1)
+            val hasFixedWidth = Regex("""(width|requiredWidth)\s*\(""").containsMatchIn(call)
+            if (hasFixedWidth) {
+                val s = open; val e = close + 1
+                raw += Finding(
+                    id = "", kind = FindingKind.LAYOUT_OVERFLOW,
+                    title = "${m.groupValues[1]} with fixed width may overflow at narrow widths",
+                    severity = Severity.MEDIUM, targetName = m.groupValues[1], location = loc(s, e),
+                    snippet = src.substring(s, e),
+                    explanation = "${m.groupValues[1]} with a fixed width constraint may overflow on narrow screens, " +
+                        "causing content to be cut off or clipped.",
+                    evidence = listOf(
+                        Evidence(EvidenceKind.HEURISTIC, "${m.groupValues[1]} at line ${lineOf(src, s)} has a fixed width or requiredWidth constraint."),
+                        NOT_RUN))
+            }
+        }
+
+        // 7. Hardcoded colors that may have visibility issues in different themes
+        for (m in Regex("""Color\(0x[0-9a-fA-F]{6,8}\)""").findAll(code)) {
+            val s = m.range.first; val e = m.range.last + 1
+            raw += Finding(
+                id = "", kind = FindingKind.COLOR_STATE_VISIBILITY,
+                title = "Hardcoded color may have visibility issues",
+                severity = Severity.LOW, targetName = "Color", location = loc(s, e),
+                snippet = src.substring(s, e),
+                explanation = "Hardcoded colors may not meet accessibility contrast guidelines in light or dark themes.",
+                evidence = listOf(
+                    Evidence(EvidenceKind.HEURISTIC, "Hardcoded color at line ${lineOf(src, s)} may have poor contrast in some themes."),
+                    NOT_RUN))
+        }
+
         return raw.sortedBy { it.location.startOffset }
             .mapIndexed { i, f -> f.copy(id = "CW-%03d".format(i + 1)) }
     }

@@ -36,7 +36,8 @@ Buttons: Review findings (→ Diagnose), Reset workflow, Apply approved patch, R
 
 ## Static analysis rules (heuristic evidence only)
 SMALL_TOUCH_TARGET (interactive chain with `.size/.width/.height` < 48dp and no `minimumInteractiveComponentSize`),
-CLICKABLE_BEFORE_PADDING, ADJACENT_CLICKABLES (≤ 6 lines apart), MISSING_CONTENT_DESCRIPTION (clickable Icon/Image with `contentDescription = null`).
+CLICKABLE_BEFORE_PADDING, ADJACENT_CLICKABLES (≤ 6 lines apart), MISSING_CONTENT_DESCRIPTION (clickable Icon/Image with `contentDescription = null`),
+TEXT_CLIPPING (Text without maxLines or overflow), LAYOUT_OVERFLOW (Row/Column/Box with fixed width), COLOR_STATE_VISIBILITY (hardcoded color).
 Comments and string literals are ignored. Every static finding carries a HEURISTIC and a NOT_RUN evidence item.
 
 ## Patch safety

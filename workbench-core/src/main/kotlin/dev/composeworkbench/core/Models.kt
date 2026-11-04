@@ -8,7 +8,8 @@ enum class Stage(val label: String) {
 enum class Severity { HIGH, MEDIUM, LOW }
 
 enum class FindingKind {
-    SMALL_TOUCH_TARGET, CLICKABLE_BEFORE_PADDING, ADJACENT_CLICKABLES, MISSING_CONTENT_DESCRIPTION
+    SMALL_TOUCH_TARGET, CLICKABLE_BEFORE_PADDING, ADJACENT_CLICKABLES, MISSING_CONTENT_DESCRIPTION,
+    TEXT_CLIPPING, LAYOUT_OVERFLOW, COLOR_STATE_VISIBILITY
 }
 
 /** How strong a piece of evidence is. Static analysis is only ever HEURISTIC. */
@@ -18,12 +19,45 @@ enum class EvidenceKind(val label: String) {
     BEHAVIORAL_PASS("Behavioral pass"),
     BEHAVIORAL_FAIL("Behavioral fail"),
     INCONCLUSIVE("Inconclusive"),
-    NOT_RUN("Not run")
+    NOT_RUN("Not run"),
+    SCREENSHOT("Screenshot"),
+    TEST_RESULT("Test result")
 }
 
-data class Evidence(val kind: EvidenceKind, val detail: String)
+enum class Confidence { LOW, MEDIUM, HIGH }
 
-data class SourceLocation(val file: String, val line: Int, val startOffset: Int, val endOffset: Int)
+enum class ThemeMode { LIGHT, DARK, SYSTEM }
+
+/** A single piece of evidence tied to a scenario where applicable. */
+data class Evidence(
+    val kind: EvidenceKind,
+    val detail: String,
+    val id: String = "",
+    val scenarioId: String? = null,
+    val data: Map<String, String> = emptyMap(),
+    val screenshotPath: String? = null
+)
+
+data class SourceLocation(
+    val file: String,
+    val line: Int,
+    val startOffset: Int,
+    val endOffset: Int,
+    val startColumn: Int? = null,
+    val endColumn: Int? = null
+)
+
+/** A runnable scenario with environment dimensions. */
+data class InspectionScenario(
+    val id: String,
+    val name: String,
+    val fontScale: Float = 1.0f,
+    val theme: ThemeMode = ThemeMode.SYSTEM,
+    val windowWidthDp: Int? = null,
+    val windowHeightDp: Int? = null,
+    val localeTag: String? = null,
+    val stateDescription: String? = null
+)
 
 data class Finding(
     val id: String,
@@ -37,6 +71,14 @@ data class Finding(
     val snippet: String,
     val explanation: String,
     val evidence: List<Evidence>,
+    /** Rule identifier that produced this finding. */
+    val ruleId: String? = null,
+    /** Confidence level of this finding. */
+    val confidence: Confidence = Confidence.MEDIUM,
+    /** Human-readable message summarizing the finding. */
+    val message: String? = null,
+    /** Suggested fix identifiers related to this finding. */
+    val suggestedFixIds: List<String> = emptyList(),
     /** True for illustrative demo findings. Demo findings must never be presented as real defects. */
     val isDemo: Boolean = false,
     /** Offset of the `Modifier` token for chain-based findings, -1 otherwise. */

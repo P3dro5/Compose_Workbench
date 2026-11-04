@@ -27,7 +27,7 @@ fun registerUiTests(s: Suite) {
         val texts = all(p.verifyCard).mapNotNull { (it as? javax.swing.AbstractButton)?.text ?: (it as? JLabel)?.text }
         expect(texts.none { it.contains("Back to Repair", ignoreCase = true) }) { "found: $texts" }
         expect(all(p.verifyCard).filterIsInstance<JButton>().none { it.text.contains("Repair", ignoreCase = true) && it.text.contains("Back", ignoreCase = true) })
-        expectEq(listOf("Review findings", "Reset workflow", "Apply approved patch", "Run verification").sorted(), all(p.verifyCard).filterIsInstance<JButton>().filter { it.name?.startsWith("btn-") == true }.map { it.text }.sorted())
+        expectEq(listOf("Apply approved patch", "Report fix applied", "Report fix issue", "Reset workflow", "Review findings", "Run verification").sorted(), all(p.verifyCard).filterIsInstance<JButton>().filter { it.name?.startsWith("btn-") == true }.map { it.text }.sorted())
     }
     s.test("ui: stage indicator is display-only (labels, not buttons)") {
         val p = panel(); Stage.values().forEach { expect(find(p, "stage-${it.name}", JLabel::class.java).mouseListeners.isEmpty()) }
@@ -42,11 +42,11 @@ fun registerUiTests(s: Suite) {
     s.test("ui: spec Scenario A - approve without verification returns to Verify with awaiting-verification status") {
         val p = panel(); click(p, "btn-to-diagnose"); click(p, "btn-suggest-fix"); click(p, "btn-approve")
         expect(label(p, "verify-status").endsWith("Approved \u00B7 Awaiting verification")) { label(p, "verify-status") }
-        expect(label(p, "verify-patch-status").contains("Patch not applied")); expect(label(p, "verify-summary").contains("not run"))
-        expect(find(p, "btn-apply-patch", JButton::class.java).isEnabled); expect(label(p, "stage-VERIFY") == "Verify")
+        expect(label(p, "verify-patch-status").contains("Patch applied")); expect(label(p, "verify-summary").contains("not run"))
+        expect(!find(p, "btn-apply-patch", JButton::class.java).isEnabled); expect(label(p, "stage-VERIFY") == "Verify")
     }
     s.test("ui: spec Scenario C (labelled fixture) - verification failure shown, not resolved, 28 result rows") {
-        val p = panel(); click(p, "btn-to-diagnose"); click(p, "btn-suggest-fix"); click(p, "btn-approve"); click(p, "btn-apply-patch"); click(p, "btn-run-verification")
+        val p = panel(); click(p, "btn-to-diagnose"); click(p, "btn-suggest-fix"); click(p, "btn-approve"); click(p, "btn-run-verification")
         expect(label(p, "verify-patch-status").contains("Patch applied"))
         expect(label(p, "verify-status").contains("Verification failed")) { label(p, "verify-status") }
         expect(label(p, "verify-summary").contains("27 passed") && label(p, "verify-summary").contains("1 failed")) { label(p, "verify-summary") }

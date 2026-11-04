@@ -118,14 +118,24 @@ class WorkbenchPanel(
         val header = JLabel(" ").apply { name = "repair-header"; font = font.deriveFont(Font.BOLD) }
         val text = wrapped(JTextArea()).apply { name = "repair-text" }
         val diff = mono(JTextArea()).apply { name = "repair-diff" }
-        val approve = button("Approve repair", "btn-approve") { store.selectedId?.let { store.approve(it) } }
+        val approve = button("Approve repair", "btn-approve") {
+            val id = store.selectedId ?: return@button
+            val st = store.state(id)
+            val p = st.proposal
+            if (p == null || p.autoApplicable) {
+                store.approve(id)
+            } else {
+                val response = askManualResolution(p)
+                if (response != null) store.approve(id, response)
+            }
+        }
         val reject = button("Reject", "btn-reject") { store.selectedId?.let { store.reject(it) } }
         init {
             name = "card-REPAIR"; border = BorderFactory.createEmptyBorder(8, 8, 8, 8)
             add(header, BorderLayout.NORTH)
             add(JSplitPane(JSplitPane.VERTICAL_SPLIT, JScrollPane(text), JScrollPane(diff)).apply { resizeWeight = 0.5 }, BorderLayout.CENTER)
             val south = JPanel(BorderLayout())
-            south.add(JLabel("Approving records your decision only. It does not modify files or verify the fix.").apply { border = BorderFactory.createEmptyBorder(0, 0, 0, 8) }, BorderLayout.CENTER)
+            south.add(JLabel("Approving will apply the suggested fix to your source file automatically.").apply { border = BorderFactory.createEmptyBorder(0, 0, 0, 8) }, BorderLayout.CENTER)
             south.add(JPanel(FlowLayout(FlowLayout.RIGHT)).apply { add(reject); add(approve) }, BorderLayout.EAST)
             add(south, BorderLayout.SOUTH)
         }
@@ -138,13 +148,93 @@ class WorkbenchPanel(
                 append("\nLocation\n${f.location.file}:${f.location.line}\n\n")
                 append("Proposed repair\n${p.summary}\n\nWhy this helps\n${p.rationale}\n")
                 if (p.notes.isNotEmpty()) { append("\nNotes\n"); p.notes.forEach { append("  - $it\n") } }
-                if (!p.autoApplicable) append("\nNo automatic patch is available; review the notes and apply the change manually if you agree.\n")
+                if (!p.autoApplicable) append("\nNo automatic patch is available; review the suggested fixes below and apply the change manually if you agree.\n")
                 if (p.requiresHumanInput) append("\nThis repair needs your input after it is applied.\n")
             }
             text.caretPosition = 0
-            diff.text = p?.diff ?: ""; diff.caretPosition = 0
+
+            // Show "What should be done?" with suggested fixes when no automatic patch
+            if (p == null) {
+                diff.text = ""
+            } else if (!p.autoApplicable && p.suggestedFixes.isNotEmpty()) {
+                val sb = StringBuilder("What should be done?\n\n")
+                sb.append("Suggested fixes:\n\n")
+                p.suggestedFixes.forEachIndexed { i, fix ->
+                    sb.append("${i + 1}. ${fix.description}\n")
+                    sb.append("   Before:\n     ${fix.beforeCode}\n")
+                    sb.append("   After:\n     ${fix.afterCode}\n\n")
+                }
+                sb.append("Open the source file to edit manually.")
+                diff.text = sb.toString()
+            } else {
+                diff.text = p.diff
+            }
+            diff.caretPosition = 0
             val awaiting = st?.approval == ApprovalState.AWAITING_APPROVAL
             approve.isEnabled = awaiting; reject.isEnabled = awaiting
+        }
+    }
+
+    /** Asks how the user wants to proceed with a manual (no-automatic-patch) proposal.
+     * Returns the user's chosen resolution, or null if cancelled. */
+    private fun askManualResolution(p: Proposal): String? {
+        val options = arrayOf("I'll apply the change manually", "Skip this repair for now", "Open source file to edit", "Other…")
+        val choice = JOptionPane.showOptionDialog(
+            this,
+            "No automatic patch is available for this repair.\n\n${p.summary}\n\nHow would you like to proceed?",
+            "Manual repair decision",
+            JOptionPane.DEFAULT_OPTION,
+            JOptionPane.QUESTION_MESSAGE,
+            null,
+            options,
+            options[0]
+        )
+        return when (choice) {
+            0 -> "Applied manually by user"
+            1 -> "Skipped by user"
+            2 -> {
+                // Open source file at the finding location
+                val f = store.selected
+                if (f != null) {
+                    openSourceFileAt(f.location.file, f.location.line)
+                }
+                "Opened source file at ${f?.location?.file}:${f?.location?.line}"
+            }
+            3 -> {
+                val input = JOptionPane.showInputDialog(
+                    this,
+                    "Describe how you will address this repair:",
+                    "Other resolution",
+                    JOptionPane.PLAIN_MESSAGE
+                )
+                if (input == null || input.isBlank()) null else "Other: $input"
+            }
+            else -> null
+        }
+    }
+
+    /** Opens the source file at the given line (delegates to the IDE if available). */
+    private fun openSourceFileAt(filePath: String, line: Int) {
+        val file = java.io.File(filePath)
+        if (file.isFile) {
+            try {
+                java.awt.Desktop.getDesktop().open(file)
+            } catch (e: Exception) {
+                // Fallback: show file path in a dialog
+                JOptionPane.showMessageDialog(
+                    this,
+                    "Source file: $filePath\nLine: $line\n\nOpen this file in your IDE and make the manual fix.",
+                    "Open Source File",
+                    JOptionPane.INFORMATION_MESSAGE
+                )
+            }
+        } else {
+            JOptionPane.showMessageDialog(
+                this,
+                "Source file not found: $filePath\n\nPlease locate the file manually in your project.",
+                "File Not Found",
+                JOptionPane.WARNING_MESSAGE
+            )
         }
     }
 
@@ -175,12 +265,30 @@ class WorkbenchPanel(
         val run = button("Run verification", "btn-run-verification") { store.selectedId?.let { store.runVerification(it, engineFactory()) } }
         val review = button("Review findings", "btn-review-findings") { store.goTo(Stage.DIAGNOSE) }
         val reset = button("Reset workflow", "btn-reset") { store.reset() }
+        val reportFixApplied = button("Report fix applied", "btn-report-fix-applied") {
+            store.selectedId?.let { id ->
+                store.recordManualFixApplied(id, true)
+            }
+        }
+        val reportFixIssue = button("Report fix issue", "btn-report-fix-issue") {
+            store.selectedId?.let { id ->
+                val input = JOptionPane.showInputDialog(
+                    this,
+                    "Describe the issue with the manual fix:",
+                    "Report Fix Issue",
+                    JOptionPane.QUESTION_MESSAGE
+                )
+                if (input != null && input.isNotBlank()) {
+                    store.recordManualFixIssue(id, input)
+                }
+            }
+        }
         init {
             name = "card-VERIFY"; border = BorderFactory.createEmptyBorder(8, 8, 8, 8)
             val north = JPanel(GridLayout(0, 1)).apply { add(header); add(status); add(patchStatus); add(summary); add(engineLabel); add(historyLabel) }
             add(north, BorderLayout.NORTH)
             add(JSplitPane(JSplitPane.VERTICAL_SPLIT, JScrollPane(overviewTable), JScrollPane(resultsTable)).apply { resizeWeight = 0.25 }, BorderLayout.CENTER)
-            add(JPanel(FlowLayout(FlowLayout.RIGHT)).apply { add(review); add(reset); add(apply); add(run) }, BorderLayout.SOUTH)
+            add(JPanel(FlowLayout(FlowLayout.RIGHT)).apply { add(review); add(reset); add(apply); add(run); add(reportFixApplied); add(reportFixIssue) }, BorderLayout.SOUTH)
         }
         fun update() {
             val f = store.selected; val st = f?.let { store.state(it.id) }
@@ -200,6 +308,8 @@ class WorkbenchPanel(
             val approved = st?.approval == ApprovalState.APPROVED
             apply.isEnabled = approved && st?.patch != PatchState.APPLIED
             run.isEnabled = f != null
+            reportFixApplied.isEnabled = approved && st?.manualFixApplied != true
+            reportFixIssue.isEnabled = approved && st?.manualFixApplied == true
         }
     }
 }

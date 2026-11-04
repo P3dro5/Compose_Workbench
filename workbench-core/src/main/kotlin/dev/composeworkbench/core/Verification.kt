@@ -18,9 +18,29 @@ enum class ResultSource(val label: String) {
     NONE("No execution")
 }
 
-data class MatrixCase(val findingId: String, val targetName: String, val fontScale: Float, val probe: Probe) {
-    val key: String get() = key(targetName, fontScale, probe)
-    companion object { fun key(target: String, scale: Float, probe: Probe) = "$target|${"%.1f".format(java.util.Locale.ROOT, scale)}|${probe.name}" }
+data class MatrixCase(
+    val findingId: String,
+    val targetName: String,
+    val fontScale: Float,
+    val probe: Probe,
+    val theme: ThemeMode = ThemeMode.SYSTEM,
+    val windowWidthDp: Int? = null,
+    val localeTag: String? = null,
+    val stateDescription: String? = null,
+    val contentExtreme: String? = null
+) {
+    val key: String get() = key(targetName, fontScale, probe, theme, windowWidthDp, localeTag, stateDescription, contentExtreme)
+    companion object {
+        fun key(target: String, scale: Float, probe: Probe, theme: ThemeMode = ThemeMode.SYSTEM,
+                windowWidthDp: Int? = null, localeTag: String? = null, stateDescription: String? = null,
+                contentExtreme: String? = null) =
+            "$target|${"%.1f".format(java.util.Locale.ROOT, scale)}|${probe.name}" +
+                (if (theme != ThemeMode.SYSTEM) "|t=${theme.name}" else "") +
+                (windowWidthDp?.let { "|w=$it" } ?: "") +
+                (localeTag?.let { "|l=$it" } ?: "") +
+                (stateDescription?.let { "|s=$it" } ?: "") +
+                (contentExtreme?.let { "|c=$it" } ?: "")
+    }
 }
 
 data class Point(val x: Float, val y: Float)
@@ -57,6 +77,24 @@ object ProbeGeometry {
 object VerificationMatrix {
     fun cases(f: Finding): List<MatrixCase> =
         FontScales.ALL.flatMap { s -> Probe.values().map { p -> MatrixCase(f.id, f.targetName, s, p) } }
+
+    /** Extended scenarios with additional dimensions (theme, window, locale, state, content).
+     * Generates a small, useful set rather than an unbounded Cartesian product. */
+    fun extendedCases(f: Finding, themes: List<ThemeMode> = listOf(ThemeMode.LIGHT, ThemeMode.DARK),
+                      windows: List<Int> = listOf(320, 360, 400),
+                      locales: List<String> = listOf("en", "es", "ja"),
+                      states: List<String> = listOf("enabled", "disabled", "selected", "loading", "error"),
+                      contents: List<String> = listOf("short", "long")): List<MatrixCase> {
+        val base = cases(f)
+        val extended = mutableListOf<MatrixCase>()
+        // One representative case per dimension variation at baseline font scale
+        for (t in themes) extended += MatrixCase(f.id, f.targetName, 1.0f, Probe.CENTER, theme = t)
+        for (w in windows) extended += MatrixCase(f.id, f.targetName, 1.0f, Probe.CENTER, windowWidthDp = w)
+        for (l in locales) extended += MatrixCase(f.id, f.targetName, 1.0f, Probe.CENTER, localeTag = l)
+        for (s in states) extended += MatrixCase(f.id, f.targetName, 1.0f, Probe.CENTER, stateDescription = s)
+        for (c in contents) extended += MatrixCase(f.id, f.targetName, 1.0f, Probe.CENTER, contentExtreme = c)
+        return base + extended
+    }
 
     fun expectedFor(c: MatrixCase) =
         if (c.probe.negative) "A tap outside '${c.targetName}' must NOT trigger its click action"

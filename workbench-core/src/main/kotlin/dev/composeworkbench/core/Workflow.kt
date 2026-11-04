@@ -17,6 +17,12 @@ data class IssueState(
     val verification: VerificationState = VerificationState.NOT_RUN,
     val proposal: Proposal? = null,
     val patchMessage: String? = null,
+    /** User's recorded response when approving a manual (no-automatic-patch) proposal. */
+    val manualResolution: String? = null,
+    /** Whether the user reported applying a manual fix. */
+    val manualFixApplied: Boolean = false,
+    /** Issue description if the manual fix caused a problem. */
+    val manualFixIssue: String? = null,
     /** Runs executed while approved (count toward verification). */
     val runs: List<VerificationRun> = emptyList(),
     /** Runs executed before approval (baseline evidence, never counted toward verification). */
@@ -91,13 +97,47 @@ class WorkflowStore(
         changed(); return true
     }
 
-    /** Repair -> Verify. Records the decision only; does not apply the patch and does not mark anything verified. */
-    fun approve(id: String): Boolean {
+    /** Repair -> Verify. Records the decision and applies the patch automatically when one exists. */
+    fun approve(id: String, manualResolution: String? = null): Boolean {
         val st = state(id)
         if (st.approval != ApprovalState.AWAITING_APPROVAL || st.proposal == null) { message = "There is no proposal awaiting approval for $id."; changed(); return false }
-        update(id) { it.copy(approval = ApprovalState.APPROVED, verification = VerificationState.NOT_RUN, lastRun = null) }
+        val patch = st.proposal?.patch
+        val hasAutomaticPatch = patch != null
+        update(id) { it.copy(approval = ApprovalState.APPROVED, verification = VerificationState.NOT_RUN, lastRun = null, manualResolution = manualResolution) }
+
+        // Apply the patch automatically when one exists
+        if (hasAutomaticPatch) {
+            val r = writer.apply(patch)
+            update(id) {
+                if (r.success) it.copy(patch = PatchState.APPLIED, patchMessage = r.message, verification = VerificationState.NOT_RUN, lastRun = null)
+                else it.copy(patch = PatchState.FAILED, patchMessage = r.message)
+            }
+            selectedId = id; stage = Stage.VERIFY
+            message = if (r.success) "Repair approved and patch applied to ${patch.file}. Run verification from this screen." else "Repair approved but patch failed: ${r.message}."
+            changed(); return r.success
+        }
+
+        // No automatic patch - record decision only
         selectedId = id; stage = Stage.VERIFY
-        message = "Repair approved. No file was modified; apply the patch and run verification from this screen."
+        message = "Repair approved. No automatic patch available; apply the suggested fix manually, then run verification from this screen."
+        changed(); return true
+    }
+
+    /** Records that the user applied a manual fix for the finding. */
+    fun recordManualFixApplied(id: String, applied: Boolean): Boolean {
+        val st = state(id)
+        if (st.approval != ApprovalState.APPROVED) { message = "The repair for $id has not been approved."; changed(); return false }
+        update(id) { it.copy(manualFixApplied = applied) }
+        message = if (applied) "Manual fix application recorded for $id." else "Manual fix application cleared for $id."
+        changed(); return true
+    }
+
+    /** Records an issue with a manual fix attempt. Creates a new finding-level issue note. */
+    fun recordManualFixIssue(id: String, issue: String): Boolean {
+        val st = state(id)
+        if (st.approval != ApprovalState.APPROVED) { message = "The repair for $id has not been approved."; changed(); return false }
+        update(id) { it.copy(manualFixIssue = issue) }
+        message = "Manual fix issue recorded for $id: $issue"
         changed(); return true
     }
 

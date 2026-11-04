@@ -40,6 +40,71 @@ fun registerCoreTests(s: Suite) {
         expectEq(a.map { it.id }, b.map { it.id }); expectEq("CW-001", a.first().id)
     }
 
+    // ---------- New detectors (design-aligned) ----------
+    s.test("analyzer: text without maxLines/overflow flagged as TEXT_CLIPPING") {
+        val src = "package x\nimport androidx.compose.foundation.clickable\nimport androidx.compose.ui.Modifier\nfun A(){ Text(text = \"Hello\", modifier = Modifier.clickable{}) }"
+        val f = SourceAnalyzer.analyze("F.kt", src)
+        expect(f.any { it.kind == FindingKind.TEXT_CLIPPING }) { "no text clipping: ${f.map { it.kind to it.targetName }}" }
+        expect(f.find { it.kind == FindingKind.TEXT_CLIPPING }!!.evidence.any { e -> e.kind == EvidenceKind.HEURISTIC })
+    }
+    s.test("analyzer: text with maxLines is NOT flagged") {
+        val src = "package x\nimport androidx.compose.foundation.clickable\nimport androidx.compose.ui.Modifier\nfun A(){ Text(text = \"Hello\", maxLines = 1, modifier = Modifier.clickable{}) }"
+        val f = SourceAnalyzer.analyze("F.kt", src)
+        expect(f.none { it.kind == FindingKind.TEXT_CLIPPING }) { "text with maxLines flagged: $f" }
+    }
+    s.test("analyzer: fixed-width Row flagged as LAYOUT_OVERFLOW") {
+        val src = "package x\nimport androidx.compose.foundation.clickable\nimport androidx.compose.ui.Modifier\nfun A(){ Row(modifier = Modifier.width(400.dp), content = { }) }"
+        val f = SourceAnalyzer.analyze("F.kt", src)
+        expect(f.any { it.kind == FindingKind.LAYOUT_OVERFLOW }) { "no layout overflow: ${f.map { it.kind to it.targetName }}" }
+    }
+    s.test("analyzer: hardcoded color flagged as COLOR_STATE_VISIBILITY") {
+        val src = "package x\nimport androidx.compose.foundation.clickable\nimport androidx.compose.ui.Modifier\nfun A(){ Box(modifier = Modifier.clickable{}.background(Color(0xFF0000))) }"
+        val f = SourceAnalyzer.analyze("F.kt", src)
+        expect(f.any { it.kind == FindingKind.COLOR_STATE_VISIBILITY }) { "no color visibility: ${f.map { it.kind to it.targetName }}" }
+    }
+
+    // ---------- New models ----------
+    s.test("models: InspectionScenario defaults and custom values") {
+        val s1 = InspectionScenario("s1", "Baseline")
+        expectEq(1.0f, s1.fontScale); expectEq(ThemeMode.SYSTEM, s1.theme)
+        val s2 = InspectionScenario("s2", "Large text dark", fontScale = 2.0f, theme = ThemeMode.DARK, windowWidthDp = 320, localeTag = "ja", stateDescription = "disabled")
+        expectEq(2.0f, s2.fontScale); expectEq(ThemeMode.DARK, s2.theme); expectEq(320, s2.windowWidthDp); expectEq("ja", s2.localeTag); expectEq("disabled", s2.stateDescription)
+    }
+    s.test("models: Evidence with optional fields") {
+        val e1 = Evidence(EvidenceKind.GEOMETRY, "bounds 100,100,200,200")
+        expect(e1.id.isEmpty()); expect(e1.scenarioId == null); expectEq(emptyMap(), e1.data); expect(e1.screenshotPath == null)
+        val e2 = Evidence(EvidenceKind.SCREENSHOT, "captured", id = "ev-1", scenarioId = "sc-1", data = mapOf("density" to "2.0"), screenshotPath = "/tmp/screenshot.png")
+        expectEq("ev-1", e2.id); expectEq("sc-1", e2.scenarioId); expectEq("2.0", e2.data["density"]); expectEq("/tmp/screenshot.png", e2.screenshotPath)
+    }
+    s.test("models: SourceLocation with optional columns") {
+        val l1 = SourceLocation("F.kt", 5, 100, 150)
+        expect(l1.startColumn == null); expect(l1.endColumn == null)
+        val l2 = SourceLocation("F.kt", 5, 100, 150, startColumn = 10, endColumn = 60)
+        expectEq(10, l2.startColumn); expectEq(60, l2.endColumn)
+    }
+
+    // ---------- Extended scenarios ----------
+    s.test("matrix: extended cases add dimension variations beyond 28") {
+        val d = tempDir(); val (_, fs) = DemoData.create(d)
+        val base = VerificationMatrix.cases(fs[0]); expectEq(28, base.size)
+        val ext = VerificationMatrix.extendedCases(fs[0])
+        expect(ext.size > 28) { "extended should exceed base: ${ext.size}" }
+        expect(ext.any { it.theme == ThemeMode.DARK }) { "no dark theme case" }
+        expect(ext.any { it.windowWidthDp == 320 }) { "no narrow window case" }
+        expect(ext.any { it.localeTag == "ja" }) { "no ja locale case" }
+        expect(ext.any { it.stateDescription == "disabled" }) { "no disabled state case" }
+        expect(ext.any { it.contentExtreme == "long" }) { "no long content case" }
+    }
+    s.test("matrix: extended case keys are unique") {
+        val d = tempDir(); val (_, fs) = DemoData.create(d)
+        val ext = VerificationMatrix.extendedCases(fs[0]); expectEq(ext.size, ext.map { it.key }.toSet().size, "duplicate keys")
+    }
+    s.test("matrix: base case keys remain backward compatible") {
+        val d = tempDir(); val (_, fs) = DemoData.create(d)
+        val base = VerificationMatrix.cases(fs[0])
+        expect(base.all { !it.key.contains("|t=") && !it.key.contains("|w=") }) { "base keys should not have dimension prefixes" }
+    }
+
     // ---------- Proposals, diff, patch ----------
     s.test("proposals: every kind yields a distinct, finding-specific proposal with a diff") {
         val src = HDR + """

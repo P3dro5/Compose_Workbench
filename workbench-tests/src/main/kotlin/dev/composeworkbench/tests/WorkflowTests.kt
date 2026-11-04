@@ -22,12 +22,12 @@ fun registerWorkflowTests(s: Suite) {
         expectEq(Stage.REPAIR, x.store.stage); expectEq(ApprovalState.AWAITING_APPROVAL, x.store.state(x.id2).approval)
         expectEq("Repair proposed \u00B7 Awaiting approval", x.store.state(x.id2).statusLabel()); expectEq(x.original, x.file.readText(), "file")
     }
-    s.test("workflow: approve -> Verify, does NOT modify file, patch NOT_APPLIED, verification NOT_RUN, not resolved") {
+    s.test("workflow: approve -> Verify, applies patch automatically, file modified, verification NOT_RUN, not resolved") {
         val x = Fixture(); x.store.suggestFix(x.id2); x.store.approve(x.id2)
         val st = x.store.state(x.id2)
-        expectEq(Stage.VERIFY, x.store.stage); expectEq(ApprovalState.APPROVED, st.approval); expectEq(PatchState.NOT_APPLIED, st.patch)
+        expectEq(Stage.VERIFY, x.store.stage); expectEq(ApprovalState.APPROVED, st.approval); expectEq(PatchState.APPLIED, st.patch)
         expectEq(VerificationState.NOT_RUN, st.verification); expect(!st.resolved); expectEq("Approved \u00B7 Awaiting verification", st.statusLabel())
-        expectEq(x.original, x.file.readText(), "file")
+        expect(x.file.readText().contains(".minimumInteractiveComponentSize()")) { "file should be patched" }
     }
     s.test("workflow: reject -> Diagnose, file untouched, not approved") {
         val x = Fixture(); x.store.suggestFix(x.id1); x.store.reject(x.id1)
@@ -38,18 +38,20 @@ fun registerWorkflowTests(s: Suite) {
         val x = Fixture(); expect(!x.store.approve(x.id1)); expect(!x.store.applyApprovedPatch(x.id1).success)
         x.store.suggestFix(x.id1); expect(!x.store.applyApprovedPatch(x.id1).success) { "applied while only proposed" }; expectEq(x.original, x.file.readText(), "file")
     }
-    s.test("workflow: apply approved patch writes file; resets verification; still not resolved") {
+    s.test("workflow: approve auto-applies patch; applyApprovedPatch after approve reports already applied") {
         val x = Fixture(); x.store.suggestFix(x.id2); x.store.approve(x.id2)
-        val r = x.store.applyApprovedPatch(x.id2); expect(r.success) { r.message }
-        val st = x.store.state(x.id2); expectEq(PatchState.APPLIED, st.patch); expectEq(VerificationState.NOT_RUN, st.verification); expect(!st.resolved)
+        val st = x.store.state(x.id2); expectEq(PatchState.APPLIED, st.patch)
         expect(x.file.readText().contains(".minimumInteractiveComponentSize()"))
-        expect(!x.store.applyApprovedPatch(x.id2).success) { "double apply" }
+        val r = x.store.applyApprovedPatch(x.id2); expect(!r.success) { "expected already applied but: ${r.message}" }
+        expectEq(PatchState.APPLIED, x.store.state(x.id2).patch)
     }
-    s.test("workflow: failed patch application is reported, file unchanged, state FAILED, never resolved") {
-        val x = Fixture(); x.store.suggestFix(x.id2); x.store.approve(x.id2)
+    s.test("workflow: failed patch application during approve when source changed, state FAILED, never resolved") {
+        val x = Fixture(); x.store.suggestFix(x.id2)
+        // Modify source before approve so automatic patch application fails
         x.file.writeText(x.original.replace("testTag(\"favorite\")", "testTag(\"renamed\")").replace("onFavorite() }\n                .size(24.dp)", "onFavorite() }\n                .size(25.dp)"))
-        val before = x.file.readText(); val r = x.store.applyApprovedPatch(x.id2)
-        expect(!r.success); expectEq(PatchState.FAILED, x.store.state(x.id2).patch); expectEq(before, x.file.readText(), "file")
+        val before = x.file.readText(); val approved = x.store.approve(x.id2)
+        expect(!approved) { "approve should fail when patch cannot be applied" }
+        expectEq(PatchState.FAILED, x.store.state(x.id2).patch); expectEq(before, x.file.readText(), "file")
         x.store.runVerification(x.id2, DemoFixtureEngine(DemoFixtureEngine.Scenario.ALL_PASS)); expect(!x.store.state(x.id2).resolved) { "resolved despite failed patch" }
     }
     s.test("verify: unavailable engine -> 'Verification not run', never resolved") {
@@ -59,7 +61,7 @@ fun registerWorkflowTests(s: Suite) {
         expectEq(28, run.summary.notRun)
     }
     s.test("verify: demo ALL_PASS resolves a DEMO finding only, labelled as demo data") {
-        val x = Fixture(); x.store.suggestFix(x.id2); x.store.approve(x.id2); x.store.applyApprovedPatch(x.id2)
+        val x = Fixture(); x.store.suggestFix(x.id2); x.store.approve(x.id2)
         x.store.runVerification(x.id2, DemoFixtureEngine(DemoFixtureEngine.Scenario.ALL_PASS))
         expect(x.store.state(x.id2).resolved); expectEq("Resolved (demo data)", x.store.state(x.id2).statusLabel())
     }
