@@ -6,9 +6,10 @@ import javax.swing.*
 import javax.swing.table.DefaultTableModel
 
 /**
- * Four-stage workbench UI. Each stage is a card. The stage indicator is display-only.
+ * Four-stage workbench UI. Stage labels are clickable buttons to navigate between stages.
+ * After approving a repair, the UI auto-navigates to Verify.
  * The Verify card deliberately has no "Back to Repair" control: approval is decided on the Repair screen,
- * and Verify only applies the approved patch and records verification results.
+ * and Verify only records verification results.
  */
 class WorkbenchPanel(
     private val store: WorkbenchStoreHandle,
@@ -18,24 +19,27 @@ class WorkbenchPanel(
 
     private val cards = CardLayout()
     private val center = JPanel(cards)
-    private val stageLabels = Stage.values().associateWith { JLabel(it.label, SwingConstants.CENTER).apply { name = "stage-${it.name}"; border = BorderFactory.createEmptyBorder(6, 14, 6, 14); isOpaque = true } }
+    private val stageButtons = Stage.entries.associateWith { JButton(it.label).apply { name = "stage-${it.name}"; border = BorderFactory.createEmptyBorder(6, 14, 6, 14); isOpaque = true } }
     private val messageLabel = JLabel(" ").apply { name = "message"; border = BorderFactory.createEmptyBorder(6, 10, 6, 10) }
 
     private val inspect = InspectCard(); private val diagnose = DiagnoseCard()
     private val repair = RepairCard(); private val verify = VerifyCard()
 
     val verifyCard: JComponent get() = verify
-    val repairCard: JComponent get() = repair
 
     init {
         name = "workbench"
         val top = JPanel(BorderLayout())
         val steps = JPanel(FlowLayout(FlowLayout.LEFT, 4, 4)).apply { name = "stage-indicator" }
-        stageLabels.values.forEach { steps.add(it) }
+        stageButtons.values.forEach { btn ->
+            val stage = Stage.valueOf(btn.name.removePrefix("stage-"))
+            btn.addActionListener { store.goTo(stage) }
+            steps.add(btn)
+        }
         top.add(steps, BorderLayout.WEST)
         if (bannerText != null) top.add(JLabel(bannerText).apply { name = "demo-banner"; foreground = Color(0x8A5A00); border = BorderFactory.createEmptyBorder(0, 8, 0, 8) }, BorderLayout.CENTER)
         add(top, BorderLayout.NORTH)
-        Stage.values().forEach { s -> center.add(when (s) { Stage.INSPECT -> inspect; Stage.DIAGNOSE -> diagnose; Stage.REPAIR -> repair; Stage.VERIFY -> verify }, s.name) }
+        Stage.entries.forEach { s -> center.add(when (s) { Stage.INSPECT -> inspect; Stage.DIAGNOSE -> diagnose; Stage.REPAIR -> repair; Stage.VERIFY -> verify }, s.name) }
         add(center, BorderLayout.CENTER)
         add(messageLabel, BorderLayout.SOUTH)
         store.addListener { refresh() }
@@ -49,11 +53,12 @@ class WorkbenchPanel(
     /** Synchronous refresh (used by tests and on the EDT). */
     fun doRefresh() {
         val cur = store.stage
-        Stage.values().forEach { s ->
-            val l = stageLabels.getValue(s)
-            l.font = l.font.deriveFont(if (s == cur) Font.BOLD else Font.PLAIN)
-            l.background = if (s == cur) UIManager.getColor("List.selectionBackground") ?: Color.LIGHT_GRAY else UIManager.getColor("Panel.background")
-            l.foreground = if (s == cur) UIManager.getColor("List.selectionForeground") ?: Color.BLACK else UIManager.getColor("Label.foreground")
+        Stage.entries.forEach { s ->
+            val btn = stageButtons.getValue(s)
+            btn.font = btn.font.deriveFont(if (s == cur) Font.BOLD else Font.PLAIN)
+            btn.background = if (s == cur) UIManager.getColor("List.selectionBackground") ?: Color.LIGHT_GRAY else UIManager.getColor("Panel.background")
+            btn.foreground = if (s == cur) UIManager.getColor("List.selectionForeground") ?: Color.BLACK else UIManager.getColor("Label.foreground")
+            btn.border = if (s == cur) BorderFactory.createLineBorder(Color.BLACK, 2) else BorderFactory.createEmptyBorder(6, 14, 6, 14)
         }
         inspect.update(); diagnose.update(); repair.update(); verify.update()
         cards.show(center, cur.name)
@@ -250,8 +255,8 @@ class WorkbenchPanel(
         val file = java.io.File(filePath)
         if (file.isFile) {
             try {
-                java.awt.Desktop.getDesktop().open(file)
-            } catch (e: Exception) {
+                Desktop.getDesktop().open(file)
+            } catch (_: Exception) {
                 // Fallback: show file path in a dialog
                 JOptionPane.showMessageDialog(
                     this,
@@ -338,10 +343,10 @@ class WorkbenchPanel(
             resultsModel.rowCount = 0
             run0?.results?.forEach { r -> resultsModel.addRow(arrayOf(r.case.findingId, r.case.targetName, "%.1fx".format(java.util.Locale.ROOT, r.case.fontScale), r.case.probe.label, r.points.joinToString("; ") { "(%.0f, %.0f)".format(java.util.Locale.ROOT, it.x, it.y) }.ifEmpty { "-" }, r.status.name, r.expected, r.observed, listOfNotNull(r.evidence.ifBlank { null }, r.error).joinToString(" | "))) }
             val approved = st?.approval == ApprovalState.APPROVED
-            apply.isEnabled = approved && st?.patch != PatchState.APPLIED
-            run.isEnabled = f != null
-            reportFixApplied.isEnabled = approved && st?.manualFixApplied != true
-            reportFixIssue.isEnabled = approved && st?.manualFixApplied == true
+            apply.isEnabled = approved && st.patch != PatchState.APPLIED
+            run.isEnabled = true
+            reportFixApplied.isEnabled = approved && st.manualFixApplied != true
+            reportFixIssue.isEnabled = approved && st.manualFixApplied == true
         }
     }
 }

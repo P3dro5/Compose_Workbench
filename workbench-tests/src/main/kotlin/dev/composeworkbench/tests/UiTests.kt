@@ -17,10 +17,11 @@ fun registerUiTests(s: Suite) {
     }
     fun click(p: Component, name: String) { onEdt { val b = find(p, name, JButton::class.java); expect(b.isEnabled) { "$name disabled" }; b.doClick() } ; flush() }
     fun label(p: Component, name: String) = find(p, name, JLabel::class.java).text
+    fun stageLabel(p: Component, name: String) = find(p, name, JButton::class.java).text
 
     s.test("ui: demo banner is shown and stage indicator lists four stages in order") {
         val p = panel(); expect(label(p, "demo-banner").contains("DEMO DATA"))
-        expectEq(listOf("Inspect", "Diagnose", "Repair", "Verify"), Stage.values().map { label(p, "stage-${it.name}") })
+        expectEq(listOf("Inspect", "Diagnose", "Repair", "Verify"), Stage.values().map { stageLabel(p, "stage-${it.name}") })
     }
     s.test("ui: Verify card has NO 'Back to Repair' control (any component, any text)") {
         val p = panel()
@@ -29,8 +30,12 @@ fun registerUiTests(s: Suite) {
         expect(all(p.verifyCard).filterIsInstance<JButton>().none { it.text.contains("Repair", ignoreCase = true) && it.text.contains("Back", ignoreCase = true) })
         expectEq(listOf("Apply approved patch", "Report fix applied", "Report fix issue", "Reset workflow", "Review findings", "Run verification").sorted(), all(p.verifyCard).filterIsInstance<JButton>().filter { it.name?.startsWith("btn-") == true }.map { it.text }.sorted())
     }
-    s.test("ui: stage indicator is display-only (labels, not buttons)") {
-        val p = panel(); Stage.values().forEach { expect(find(p, "stage-${it.name}", JLabel::class.java).mouseListeners.isEmpty()) }
+    s.test("ui: stage indicator stages are clickable buttons") {
+        val p = panel(); Stage.values().forEach { 
+            val btn = find(p, "stage-${it.name}", JButton::class.java)
+            expect(btn.isEnabled) { "stage ${it.name} button not enabled" }
+            expect(btn.actionListeners.isNotEmpty()) { "stage ${it.name} button has no action listener" }
+        }
     }
     s.test("ui: Diagnose -> Suggest fix opens Repair with proposal, diff and enabled Approve/Reject") {
         val p = panel(); click(p, "btn-to-diagnose"); click(p, "btn-suggest-fix")
@@ -43,7 +48,7 @@ fun registerUiTests(s: Suite) {
         val p = panel(); click(p, "btn-to-diagnose"); click(p, "btn-suggest-fix"); click(p, "btn-approve")
         expect(label(p, "verify-status").endsWith("Approved \u00B7 Awaiting verification")) { label(p, "verify-status") }
         expect(label(p, "verify-patch-status").contains("Patch applied")); expect(label(p, "verify-summary").contains("not run"))
-        expect(!find(p, "btn-apply-patch", JButton::class.java).isEnabled); expect(label(p, "stage-VERIFY") == "Verify")
+        expect(!find(p, "btn-apply-patch", JButton::class.java).isEnabled); expect(stageLabel(p, "stage-VERIFY") == "Verify")
     }
     s.test("ui: spec Scenario C (labelled fixture) - verification failure shown, not resolved, 28 result rows") {
         val p = panel(); click(p, "btn-to-diagnose"); click(p, "btn-suggest-fix"); click(p, "btn-approve"); click(p, "btn-run-verification")
@@ -55,7 +60,7 @@ fun registerUiTests(s: Suite) {
     }
     s.test("ui: Reject returns to Diagnose and Verify never shows approval") {
         val p = panel(); click(p, "btn-to-diagnose"); click(p, "btn-suggest-fix"); click(p, "btn-reject")
-        expect(label(p, "stage-DIAGNOSE") == "Diagnose"); expect(label(p, "verify-status").contains("Proposal rejected"))
+        expect(stageLabel(p, "stage-DIAGNOSE") == "Diagnose"); expect(label(p, "verify-status").contains("Proposal rejected"))
     }
     s.test("ui: Reset workflow returns to Inspect") {
         val p = panel(); click(p, "btn-to-diagnose"); click(p, "btn-suggest-fix"); click(p, "btn-approve"); click(p, "btn-reset")

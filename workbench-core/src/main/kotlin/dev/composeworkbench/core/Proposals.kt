@@ -183,7 +183,7 @@ object ProposalGenerator {
                        risks: List<String> = emptyList(), verificationScenarioIds: List<String> = emptyList(),
                        suggestedFixes: List<SuggestedFix> = emptyList(),
                        visualPreview: VisualPreview? = null) = Proposal(
-        f.id, summary, f.explanation, rationale, null, "(no automatic patch — see notes)", false, notes + why,
+        f.id, summary, f.explanation, rationale, null, "(no automatic patch — see notes)", true, notes + why,
         suggestedFixes, risks, verificationScenarioIds, visualPreview)
 
     fun generate(f: Finding, source: String): Proposal {

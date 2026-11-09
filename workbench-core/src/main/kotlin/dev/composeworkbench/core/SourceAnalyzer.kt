@@ -18,7 +18,7 @@ object SourceAnalyzer {
 
     // ---- Visual preview generation ----
 
-    private fun visualPreviewFor(kind: FindingKind, targetName: String, dp: Float?, colorHex: String?, hasContentDescription: Boolean): VisualPreview {
+    private fun visualPreviewFor(kind: FindingKind, targetName: String, dp: Float?, colorHex: String?, hasContentDescription: Boolean = false): VisualPreview {
         val beforeIssues = mutableListOf<PreviewIssue>()
         val afterIssues = mutableListOf<PreviewIssue>()
 
@@ -263,7 +263,7 @@ object SourceAnalyzer {
                             NOT_RUN),
                         chainStart = c.start,
                         visualPreview = visualPreviewFor(
-                            FindingKind.SMALL_TOUCH_TARGET, target, dp.toFloat(), null, false)
+                            FindingKind.SMALL_TOUCH_TARGET, target, dp.toFloat(), null)
                     )
                 }
             }
@@ -351,16 +351,16 @@ object SourceAnalyzer {
             val hasMaxLines = Regex("""maxLines\s*=""").containsMatchIn(call)
             val hasOverflow = Regex("""overflow\s*=""").containsMatchIn(call)
             if (!hasMaxLines && !hasOverflow) {
-                val s = open; val e = close + 1
+                val e = close + 1
                 raw += Finding(
                     id = "", kind = FindingKind.TEXT_CLIPPING,
                     title = "Text may clip at larger font scales",
-                    severity = Severity.MEDIUM, targetName = "Text", location = loc(s, e),
-                    snippet = src.substring(s, e),
+                    severity = Severity.MEDIUM, targetName = "Text", location = loc(open, e),
+                    snippet = src.substring(open, e),
                     explanation = "Text without maxLines or overflow handling may clip at larger font scales, " +
                         "making content unreadable or hiding important information.",
                     evidence = listOf(
-                        Evidence(EvidenceKind.HEURISTIC, "Text call at line ${lineOf(src, s)} has no maxLines or overflow parameter."),
+                        Evidence(EvidenceKind.HEURISTIC, "Text call at line ${lineOf(src, open)} has no maxLines or overflow parameter."),
                         NOT_RUN),
                     visualPreview = visualPreviewFor(
                         FindingKind.TEXT_CLIPPING, "Text", null, null, false)

@@ -1,10 +1,8 @@
 package dev.composeworkbench.ui
 
 import dev.composeworkbench.core.ComponentPreview
-import dev.composeworkbench.core.PreviewIssue
 import dev.composeworkbench.core.PreviewSeverity
 import java.awt.*
-import java.awt.geom.*
 import javax.swing.*
 
 /**
@@ -101,7 +99,7 @@ class ComposePreview : JPanel() {
             var issueX = componentX
             val issueY = componentY + actualHeight + 10
             val issueSize = 16
-            for ((index, issue) in data.issues.withIndex()) {
+            for ((_, issue) in data.issues.withIndex()) {
                 val color = when (issue.severity) {
                     PreviewSeverity.HIGH -> Color(0xD32F2F)
                     PreviewSeverity.MEDIUM -> Color(0xF57C00)
@@ -139,7 +137,7 @@ class ComposePreview : JPanel() {
                 cleaned.startsWith("#") -> Color.decode(cleaned)
                 else -> Color.decode("0x$cleaned")
             }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             Color(0xFF5722) // fallback
         }
     }

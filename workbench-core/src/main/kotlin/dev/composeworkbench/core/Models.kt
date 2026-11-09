@@ -16,12 +16,9 @@ enum class FindingKind {
 enum class EvidenceKind(val label: String) {
     HEURISTIC("Heuristic"),
     GEOMETRY("Geometry"),
-    BEHAVIORAL_PASS("Behavioral pass"),
-    BEHAVIORAL_FAIL("Behavioral fail"),
     INCONCLUSIVE("Inconclusive"),
     NOT_RUN("Not run"),
     SCREENSHOT("Screenshot"),
-    TEST_RESULT("Test result")
 }
 
 enum class Confidence { LOW, MEDIUM, HIGH }

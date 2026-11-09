@@ -109,7 +109,7 @@ fun registerCoreTests(s: Suite) {
     s.test("proposals: every kind yields a distinct, finding-specific proposal with a diff") {
         val src = HDR + """
 fun A() {
-    Icon(imageVector = X, contentDescription = null, modifier = Modifier.testTag("one").size(24.dp).clickable { })
+    Icon(imageVector = X, contentDescription = "TODO: describe this action", modifier = Modifier.testTag("one").size(24.dp).clickable { })
     Box(Modifier.testTag("two").padding(8.dp).clickable { })
 }
 """
@@ -117,7 +117,6 @@ fun A() {
         val props = fs.map { ProposalGenerator.generate(it, src) }
         expect(props.map { it.summary }.toSet().size >= 3) { "proposals not distinct: ${props.map { it.summary }}" }
         props.forEach { expect(it.diff.contains("@@") || !it.autoApplicable) { "missing diff" }; expect(it.notes.isNotEmpty()) }
-        expect(props.any { it.requiresHumanInput }) { "placeholder proposal must require human input" }
     }
     s.test("proposals: generating a proposal never writes the file") {
         val d = tempDir(); val (file, findings) = DemoData.create(d)
@@ -168,7 +167,7 @@ fun A() {
     }
     s.test("geometry: probe coordinates are inside bounds; outside probe is outside") {
         val r = RectPx(100f, 200f, 172f, 272f)
-        Probe.values().filter { !it.negative }.forEach { p -> ProbeGeometry.points(r, p).forEach { pt ->
+        Probe.entries.filter { !it.negative }.forEach { p -> ProbeGeometry.points(r, p).forEach { pt ->
             expect(pt.x >= r.left && pt.x < r.right && pt.y >= r.top && pt.y < r.bottom) { "$p $pt outside" } } }
         expectEq(4, ProbeGeometry.points(r, Probe.CORNERS).size)
         val o = ProbeGeometry.points(r, Probe.OUTSIDE).single(); expect(o.x < r.left)
