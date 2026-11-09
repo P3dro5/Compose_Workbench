@@ -82,5 +82,37 @@ data class Finding(
     /** True for illustrative demo findings. Demo findings must never be presented as real defects. */
     val isDemo: Boolean = false,
     /** Offset of the `Modifier` token for chain-based findings, -1 otherwise. */
-    val chainStart: Int = -1
+    val chainStart: Int = -1,
+    /** Visual preview data for before/after comparison. */
+    val visualPreview: VisualPreview? = null
 )
+
+/** Visual before/after preview data for a finding. */
+data class VisualPreview(
+    /** Before state: current problematic component. */
+    val before: ComponentPreview,
+    /** After state: how the component looks after the fix. */
+    val after: ComponentPreview,
+    /** Font scales to test (1.0x, 1.3x, 1.5x, 2.0x). */
+    val fontScales: List<Float> = listOf(1.0f, 1.3f, 1.5f, 2.0f)
+)
+
+/** Preview of a single component state. */
+data class ComponentPreview(
+    val componentName: String,
+    val widthDp: Float,
+    val heightDp: Float,
+    val isInteractive: Boolean,
+    val hasContentDescription: Boolean,
+    val colorHex: String?,
+    val issues: List<PreviewIssue>
+)
+
+data class PreviewIssue(
+    val type: PreviewIssueType,
+    val description: String,
+    val severity: PreviewSeverity
+)
+
+enum class PreviewIssueType { SMALL_TARGET, MISSING_LABEL, POOR_CONTRAST, OVERFLOW, CLIPPING }
+enum class PreviewSeverity { HIGH, MEDIUM, LOW }

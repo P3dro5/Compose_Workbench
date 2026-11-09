@@ -118,6 +118,12 @@ class WorkbenchPanel(
         val header = JLabel(" ").apply { name = "repair-header"; font = font.deriveFont(Font.BOLD) }
         val text = wrapped(JTextArea()).apply { name = "repair-text" }
         val diff = mono(JTextArea()).apply { name = "repair-diff" }
+        val previewBefore = ComposePreview().apply { name = "preview-before" }
+        val previewAfter = ComposePreview().apply { name = "preview-after" }
+        val previewLabel = JLabel("Visual preview (before / after)").apply {
+            font = font.deriveFont(Font.BOLD)
+            horizontalAlignment = SwingConstants.CENTER
+        }
         val approve = button("Approve repair", "btn-approve") {
             val id = store.selectedId ?: return@button
             val st = store.state(id)
@@ -133,7 +139,36 @@ class WorkbenchPanel(
         init {
             name = "card-REPAIR"; border = BorderFactory.createEmptyBorder(8, 8, 8, 8)
             add(header, BorderLayout.NORTH)
-            add(JSplitPane(JSplitPane.VERTICAL_SPLIT, JScrollPane(text), JScrollPane(diff)).apply { resizeWeight = 0.5 }, BorderLayout.CENTER)
+
+            val previewPanel = JPanel(BorderLayout()).apply {
+                add(previewLabel, BorderLayout.NORTH)
+                val previewSplit = JSplitPane(JSplitPane.HORIZONTAL_SPLIT,
+                    JPanel(BorderLayout()).apply {
+                        add(JLabel("BEFORE").apply { horizontalAlignment = SwingConstants.CENTER; font = font.deriveFont(Font.BOLD) }, BorderLayout.NORTH)
+                        add(JScrollPane(previewBefore), BorderLayout.CENTER)
+                    },
+                    JPanel(BorderLayout()).apply {
+                        add(JLabel("AFTER").apply { horizontalAlignment = SwingConstants.CENTER; font = font.deriveFont(Font.BOLD) }, BorderLayout.NORTH)
+                        add(JScrollPane(previewAfter), BorderLayout.CENTER)
+                    }).apply { resizeWeight = 0.5 }
+                add(previewSplit, BorderLayout.CENTER)
+                preferredSize = Dimension(-1, 200)
+                minimumSize = Dimension(-1, 150)
+            }
+
+            val textDiffSplit = JSplitPane(JSplitPane.VERTICAL_SPLIT,
+                JPanel(BorderLayout()).apply {
+                    add(JLabel("Finding details").apply { horizontalAlignment = SwingConstants.CENTER; font = font.deriveFont(Font.BOLD) }, BorderLayout.NORTH)
+                    add(JScrollPane(text), BorderLayout.CENTER)
+                },
+                JPanel(BorderLayout()).apply {
+                    add(JLabel("Code diff").apply { horizontalAlignment = SwingConstants.CENTER; font = font.deriveFont(Font.BOLD) }, BorderLayout.NORTH)
+                    add(JScrollPane(diff), BorderLayout.CENTER)
+                }).apply { resizeWeight = 0.5 }
+
+            val centerSplit = JSplitPane(JSplitPane.VERTICAL_SPLIT, previewPanel, textDiffSplit).apply { resizeWeight = 0.45 }
+            add(centerSplit, BorderLayout.CENTER)
+
             val south = JPanel(BorderLayout())
             south.add(JLabel("Approving will apply the suggested fix to your source file automatically.").apply { border = BorderFactory.createEmptyBorder(0, 0, 0, 8) }, BorderLayout.CENTER)
             south.add(JPanel(FlowLayout(FlowLayout.RIGHT)).apply { add(reject); add(approve) }, BorderLayout.EAST)
@@ -153,20 +188,17 @@ class WorkbenchPanel(
             }
             text.caretPosition = 0
 
-            // Show "What should be done?" with suggested fixes when no automatic patch
-            if (p == null) {
-                diff.text = ""
-            } else if (!p.autoApplicable && p.suggestedFixes.isNotEmpty()) {
-                val sb = StringBuilder("What should be done?\n\n")
-                sb.append("Suggested fixes:\n\n")
-                p.suggestedFixes.forEachIndexed { i, fix ->
-                    sb.append("${i + 1}. ${fix.description}\n")
-                    sb.append("   Before:\n     ${fix.beforeCode}\n")
-                    sb.append("   After:\n     ${fix.afterCode}\n\n")
-                }
-                sb.append("Open the source file to edit manually.")
-                diff.text = sb.toString()
+            // Show visual preview and diff
+            if (p == null || p.visualPreview == null) {
+                previewBefore.clear()
+                previewAfter.clear()
+                previewLabel.text = "Visual preview (not available for this finding)"
+                diff.text = p?.diff ?: ""
             } else {
+                val vp = p.visualPreview!!
+                previewBefore.setPreview(vp.before, fontScale = 1.0f, showIssues = true)
+                previewAfter.setPreview(vp.after, fontScale = 1.0f, showIssues = false)
+                previewLabel.text = "Visual preview — before (with issues) / after (fixed)"
                 diff.text = p.diff
             }
             diff.caretPosition = 0

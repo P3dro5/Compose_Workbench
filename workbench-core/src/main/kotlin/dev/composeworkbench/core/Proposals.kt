@@ -32,7 +32,9 @@ data class Proposal(
     /** Possible side effects or behavior changes. */
     val risks: List<String> = emptyList(),
     /** Scenario IDs that must be rerun after applying this repair. */
-    val verificationScenarioIds: List<String> = emptyList()
+    val verificationScenarioIds: List<String> = emptyList(),
+    /** Visual before/after preview data for this finding. */
+    val visualPreview: VisualPreview? = null
 ) {
     val autoApplicable get() = patch != null
 }
@@ -179,9 +181,10 @@ object ProposalGenerator {
 
     private fun manual(f: Finding, summary: String, why: String, rationale: String, notes: List<String>,
                        risks: List<String> = emptyList(), verificationScenarioIds: List<String> = emptyList(),
-                       suggestedFixes: List<SuggestedFix> = emptyList()) = Proposal(
+                       suggestedFixes: List<SuggestedFix> = emptyList(),
+                       visualPreview: VisualPreview? = null) = Proposal(
         f.id, summary, f.explanation, rationale, null, "(no automatic patch — see notes)", false, notes + why,
-        suggestedFixes, risks, verificationScenarioIds)
+        suggestedFixes, risks, verificationScenarioIds, visualPreview)
 
     fun generate(f: Finding, source: String): Proposal {
         val code = SourceAnalyzer.blankComments(source)
@@ -191,12 +194,13 @@ object ProposalGenerator {
         fun finish(summary: String, rationale: String, edits: List<Edit>, human: Boolean, notes: List<String>,
                    guards: List<String> = emptyList(), risks: List<String> = emptyList(),
                    verificationScenarioIds: List<String> = emptyList(),
-                   suggestedFixes: List<SuggestedFix> = emptyList()): Proposal {
+                   suggestedFixes: List<SuggestedFix> = emptyList(),
+                   visualPreview: VisualPreview? = null): Proposal {
             val patch = Patch(f.location.file, edits, guards)
             val r = PatchApplier.applyToText(source, patch)
-            return if (!r.success) manual(f, summary, "The patch could not be generated reliably against the current source: ${r.message}", rationale, notes, risks, verificationScenarioIds, suggestedFixes)
+            return if (!r.success) manual(f, summary, "The patch could not be generated reliably against the current source: ${r.message}", rationale, notes, risks, verificationScenarioIds, suggestedFixes, visualPreview)
             else Proposal(f.id, summary, f.explanation, rationale, patch, DiffRenderer.unified(f.location.file, source, r.newText!!), human, notes,
-                suggestedFixes, risks, verificationScenarioIds)
+                suggestedFixes, risks, verificationScenarioIds, visualPreview)
         }
 
         return when (f.kind) {
@@ -213,7 +217,8 @@ object ProposalGenerator {
                             ".size(24.dp).clickable { onFavorite() }",
                             ".size(24.dp).minimumInteractiveComponentSize().clickable { onFavorite() }"
                         )
-                    ))
+                    ),
+                    visualPreview = f.visualPreview)
                 val edits = listOfNotNull(edit(source, chain.tokenEnd, chain.tokenEnd, ".minimumInteractiveComponentSize()"), importEdit(source, M3_IMPORT))
                 finish("Enlarge the touch target of '${f.targetName}' to at least 48x48dp",
                     "`minimumInteractiveComponentSize()` placed first in the chain makes the layout and hit-test area at least 48dp, " +
@@ -232,7 +237,8 @@ object ProposalGenerator {
                             ".size(24.dp).clickable { onFavorite() }",
                             ".size(24.dp).minimumInteractiveComponentSize().clickable { onFavorite() }"
                         )
-                    ))
+                    ),
+                    visualPreview = f.visualPreview)
             }
             FindingKind.CLICKABLE_BEFORE_PADDING -> {
                 val idx = chain?.calls?.indexOfFirst { it.name in SourceAnalyzer.INTERACTIVE } ?: -1
@@ -249,7 +255,8 @@ object ProposalGenerator {
                             "Modifier.padding(8.dp).clickable { }",
                             "Modifier.clickable { }.padding(8.dp)"
                         )
-                    ))
+                    ),
+                    visualPreview = f.visualPreview)
                 val c = chain.calls[idx]
                 val gap = source.substring(pad.end, c.start)
                 val original = source.substring(pad.start, c.end)
@@ -257,7 +264,8 @@ object ProposalGenerator {
                     "Swapping the order so the interactive modifier comes first means the padding is applied inside the clickable area, enlarging the tap region without changing layout size.",
                     listOf(edit(source, pad.start, c.end, source.substring(c.start, c.end) + gap + source.substring(pad.start, pad.end))), false,
                     listOf("Visual layout is unchanged, but the ripple/click area now includes the padding.",
-                        "If the padding was a deliberate outer margin, reject this proposal."))
+                        "If the padding was a deliberate outer margin, reject this proposal."),
+                    visualPreview = f.visualPreview)
                     .also { check(original.isNotEmpty()) }
             }
             FindingKind.ADJACENT_CLICKABLES -> {
@@ -272,7 +280,8 @@ object ProposalGenerator {
                             ".clickable { }",
                             ".clickable { }.padding(horizontal = 8.dp)"
                         )
-                    ))
+                    ),
+                    visualPreview = f.visualPreview)
                 val edits = listOfNotNull(edit(source, chain.tokenEnd, chain.tokenEnd, ".padding(horizontal = 8.dp)"), importEdit(source, PADDING_IMPORT))
                 finish("Add spacing between '${f.targetName}' and the adjacent interactive target",
                     "An outer 8dp horizontal margin keeps the two click regions from touching, so a tap on the shared edge is not ambiguous.",
@@ -288,7 +297,8 @@ object ProposalGenerator {
                             ".clickable { }",
                             ".clickable { }.padding(horizontal = 8.dp)"
                         )
-                    ))
+                    ),
+                    visualPreview = f.visualPreview)
             }
             FindingKind.MISSING_CONTENT_DESCRIPTION -> {
                 if (source.substring(f.location.startOffset.coerceAtMost(source.length), f.location.endOffset.coerceAtMost(source.length)) != f.snippet)
@@ -302,7 +312,8 @@ object ProposalGenerator {
                                 "contentDescription = null",
                                 "contentDescription = \"Add to favorites\""
                             )
-                        ))
+                        ),
+                        visualPreview = f.visualPreview)
                 finish("Add a content description to '${f.targetName}'",
                     "A clickable element needs an accessible name so TalkBack can announce its action.",
                     listOf(edit(source, f.location.startOffset, f.location.endOffset, "contentDescription = \"TODO: describe this action\"")), true,
@@ -317,7 +328,8 @@ object ProposalGenerator {
                             "contentDescription = null",
                             "contentDescription = \"Add to favorites\""
                         )
-                    ))
+                    ),
+                    visualPreview = f.visualPreview)
             }
             FindingKind.TEXT_CLIPPING -> {
                 manual(f, "Add maxLines or overflow handling to '${f.targetName}'",
@@ -334,7 +346,8 @@ object ProposalGenerator {
                             "Text(text = \"Hello\")",
                             "Text(text = \"Hello\", maxLines = 1, overflow = TextOverflow.Ellipsis)"
                         )
-                    ))
+                    ),
+                    visualPreview = f.visualPreview)
             }
             FindingKind.LAYOUT_OVERFLOW -> {
                 manual(f, "Review fixed width on '${f.targetName}' for narrow screens",
@@ -349,7 +362,8 @@ object ProposalGenerator {
                             "Modifier.width(400.dp)",
                             "Modifier.fillMaxWidth()"
                         )
-                    ))
+                    ),
+                    visualPreview = f.visualPreview)
             }
             FindingKind.COLOR_STATE_VISIBILITY -> {
                 manual(f, "Review color contrast for theme visibility",
@@ -364,7 +378,8 @@ object ProposalGenerator {
                             "Color(0xFF0000)",
                             "MaterialTheme.colorScheme.primary"
                         )
-                    ))
+                    ),
+                    visualPreview = f.visualPreview)
             }
         }
     }

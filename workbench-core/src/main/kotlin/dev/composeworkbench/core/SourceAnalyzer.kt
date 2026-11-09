@@ -16,6 +16,91 @@ object SourceAnalyzer {
 
     private val DP = Regex("""(\d+(?:\.\d+)?)\s*\.dp""")
 
+    // ---- Visual preview generation ----
+
+    private fun visualPreviewFor(kind: FindingKind, targetName: String, dp: Float?, colorHex: String?, hasContentDescription: Boolean): VisualPreview {
+        val beforeIssues = mutableListOf<PreviewIssue>()
+        val afterIssues = mutableListOf<PreviewIssue>()
+
+        when (kind) {
+            FindingKind.SMALL_TOUCH_TARGET -> {
+                val sizeDp = dp ?: 24.0f
+                beforeIssues.add(PreviewIssue(PreviewIssueType.SMALL_TARGET,
+                    "Target is ${sizeDp.toInt()}dp, below 48dp guideline", PreviewSeverity.HIGH))
+                beforeIssues.add(PreviewIssue(PreviewIssueType.MISSING_LABEL,
+                    "No accessible label", PreviewSeverity.MEDIUM))
+                afterIssues.add(PreviewIssue(PreviewIssueType.SMALL_TARGET,
+                    "Target now meets 48dp guideline", PreviewSeverity.LOW))
+            }
+            FindingKind.CLICKABLE_BEFORE_PADDING -> {
+                beforeIssues.add(PreviewIssue(PreviewIssueType.SMALL_TARGET,
+                    "Padding outside clickable region", PreviewSeverity.MEDIUM))
+                afterIssues.add(PreviewIssue(PreviewIssueType.SMALL_TARGET,
+                    "Padding inside clickable region", PreviewSeverity.LOW))
+            }
+            FindingKind.ADJACENT_CLICKABLES -> {
+                beforeIssues.add(PreviewIssue(PreviewIssueType.OVERFLOW,
+                    "Touch regions may overlap", PreviewSeverity.MEDIUM))
+                afterIssues.add(PreviewIssue(PreviewIssueType.OVERFLOW,
+                    "Touch regions separated", PreviewSeverity.LOW))
+            }
+            FindingKind.MISSING_CONTENT_DESCRIPTION -> {
+                beforeIssues.add(PreviewIssue(PreviewIssueType.MISSING_LABEL,
+                    "No content description - screen readers cannot announce", PreviewSeverity.HIGH))
+                afterIssues.add(PreviewIssue(PreviewIssueType.MISSING_LABEL,
+                    "Content description added", PreviewSeverity.LOW))
+            }
+            FindingKind.TEXT_CLIPPING -> {
+                beforeIssues.add(PreviewIssue(PreviewIssueType.CLIPPING,
+                    "Text may clip at larger font scales", PreviewSeverity.MEDIUM))
+                afterIssues.add(PreviewIssue(PreviewIssueType.CLIPPING,
+                    "Text constrained with maxLines/overflow", PreviewSeverity.LOW))
+            }
+            FindingKind.LAYOUT_OVERFLOW -> {
+                beforeIssues.add(PreviewIssue(PreviewIssueType.OVERFLOW,
+                    "Fixed width may overflow narrow screens", PreviewSeverity.MEDIUM))
+                afterIssues.add(PreviewIssue(PreviewIssueType.OVERFLOW,
+                    "Adaptive width constraint", PreviewSeverity.LOW))
+            }
+            FindingKind.COLOR_STATE_VISIBILITY -> {
+                beforeIssues.add(PreviewIssue(PreviewIssueType.POOR_CONTRAST,
+                    "Hardcoded color may fail contrast in themes", PreviewSeverity.LOW))
+                afterIssues.add(PreviewIssue(PreviewIssueType.POOR_CONTRAST,
+                    "Theme token adapts to light/dark", PreviewSeverity.LOW))
+            }
+        }
+
+        val before = ComponentPreview(
+            componentName = targetName,
+            widthDp = dp?.coerceAtLeast(24.0f) ?: 24.0f,
+            heightDp = dp?.coerceAtLeast(24.0f) ?: 24.0f,
+            isInteractive = true,
+            hasContentDescription = hasContentDescription,
+            colorHex = colorHex,
+            issues = beforeIssues
+        )
+
+        val afterDp = when (kind) {
+            FindingKind.SMALL_TOUCH_TARGET -> 48.0f
+            else -> dp?.coerceAtLeast(24.0f) ?: 24.0f
+        }
+
+        val after = ComponentPreview(
+            componentName = targetName,
+            widthDp = afterDp,
+            heightDp = afterDp,
+            isInteractive = true,
+            hasContentDescription = true,
+            colorHex = when {
+                kind == FindingKind.COLOR_STATE_VISIBILITY -> null
+                else -> colorHex
+            },
+            issues = afterIssues
+        )
+
+        return VisualPreview(before = before, after = after)
+    }
+
     fun lineOf(src: String, offset: Int): Int {
         var l = 1
         for (i in 0 until minOf(offset, src.length)) if (src[i] == '\n') l++
@@ -176,7 +261,10 @@ object SourceAnalyzer {
                             Evidence(EvidenceKind.HEURISTIC, "`${src.substring(call.start, call.end).trim()}` at line $line on the same chain as `.${c.calls[iIdx].name}`. " +
                                 "Static analysis only: effective touch bounds were not measured."),
                             NOT_RUN),
-                        chainStart = c.start)
+                        chainStart = c.start,
+                        visualPreview = visualPreviewFor(
+                            FindingKind.SMALL_TOUCH_TARGET, target, dp.toFloat(), null, false)
+                    )
                 }
             }
 
@@ -186,6 +274,7 @@ object SourceAnalyzer {
                 val largeSize = c.calls.any { it.name in SIZE_CALLS && (dpNumbers(it.args).minOrNull() ?: 0.0) >= MIN_TARGET_DP }
                 if (pad != null && !largeSize) {
                     val call = pad.value
+                    val padDp = dpNumbers(call.args).minOrNull()?.toFloat() ?: 0.0f
                     raw += Finding(
                         id = "", kind = FindingKind.CLICKABLE_BEFORE_PADDING,
                         title = "Padding on '$target' sits outside the clickable region",
@@ -197,7 +286,10 @@ object SourceAnalyzer {
                         evidence = listOf(
                             Evidence(EvidenceKind.HEURISTIC, "`.padding` at line ${lineOf(src, call.start)} precedes `.${c.calls[iIdx].name}` at line ${lineOf(src, c.calls[iIdx].start)}. Intent cannot be determined statically."),
                             NOT_RUN),
-                        chainStart = c.start)
+                        chainStart = c.start,
+                        visualPreview = visualPreviewFor(
+                            FindingKind.CLICKABLE_BEFORE_PADDING, target, padDp, null, false)
+                    )
                 }
             }
         }
@@ -219,7 +311,10 @@ object SourceAnalyzer {
                     evidence = listOf(
                         Evidence(EvidenceKind.HEURISTIC, "Interactive chains end at line ${lineOf(src, prev.end)} and start at line ${lineOf(src, cur.start)}. Actual overlap depends on parent layout and was not measured."),
                         NOT_RUN),
-                    chainStart = cur.start)
+                    chainStart = cur.start,
+                    visualPreview = visualPreviewFor(
+                        FindingKind.ADJACENT_CLICKABLES, target, null, null, false)
+                )
             }
         }
 
@@ -242,7 +337,10 @@ object SourceAnalyzer {
                     "so screen readers cannot announce what it does.",
                 evidence = listOf(
                     Evidence(EvidenceKind.HEURISTIC, "`contentDescription = null` at line ${lineOf(src, s)} inside a call that also applies a clickable modifier."),
-                    NOT_RUN))
+                    NOT_RUN),
+                visualPreview = visualPreviewFor(
+                    FindingKind.MISSING_CONTENT_DESCRIPTION, target, null, null, false)
+            )
         }
 
         // 5. Text that may clip or overflow at larger font scales
@@ -263,7 +361,10 @@ object SourceAnalyzer {
                         "making content unreadable or hiding important information.",
                     evidence = listOf(
                         Evidence(EvidenceKind.HEURISTIC, "Text call at line ${lineOf(src, s)} has no maxLines or overflow parameter."),
-                        NOT_RUN))
+                        NOT_RUN),
+                    visualPreview = visualPreviewFor(
+                        FindingKind.TEXT_CLIPPING, "Text", null, null, false)
+                )
             }
         }
 
@@ -284,7 +385,10 @@ object SourceAnalyzer {
                         "causing content to be cut off or clipped.",
                     evidence = listOf(
                         Evidence(EvidenceKind.HEURISTIC, "${m.groupValues[1]} at line ${lineOf(src, s)} has a fixed width or requiredWidth constraint."),
-                        NOT_RUN))
+                        NOT_RUN),
+                    visualPreview = visualPreviewFor(
+                        FindingKind.LAYOUT_OVERFLOW, m.groupValues[1], null, null, false)
+                )
             }
         }
 
@@ -299,7 +403,10 @@ object SourceAnalyzer {
                 explanation = "Hardcoded colors may not meet accessibility contrast guidelines in light or dark themes.",
                 evidence = listOf(
                     Evidence(EvidenceKind.HEURISTIC, "Hardcoded color at line ${lineOf(src, s)} may have poor contrast in some themes."),
-                    NOT_RUN))
+                    NOT_RUN),
+                visualPreview = visualPreviewFor(
+                    FindingKind.COLOR_STATE_VISIBILITY, "Color", null, src.substring(s, e), false)
+            )
         }
 
         return raw.sortedBy { it.location.startOffset }
