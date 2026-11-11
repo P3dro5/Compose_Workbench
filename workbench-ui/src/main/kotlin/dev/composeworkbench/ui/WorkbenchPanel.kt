@@ -298,8 +298,63 @@ class WorkbenchPanel(
                 }
             }
         }
+        val centerPanel = JPanel(CardLayout())
         val apply = button("Apply approved patch", "btn-apply-patch") { store.selectedId?.let { store.applyApprovedPatch(it) } }
         val run = button("Run verification", "btn-run-verification") { store.selectedId?.let { store.runVerification(it, engineFactory()) } }
+        val pullFromDevice = button("Pull results from device", "btn-pull-results") {
+            val id = store.selectedId ?: return@button
+            val projectDir = store.selected?.let { File(it.location.file).parentFile } ?: File(System.getProperty("user.dir"))
+            val adb = AdbHelper.adbPath
+            if (adb == null) {
+                JOptionPane.showMessageDialog(
+                    this,
+                    "Android SDK not found. Please run the instrumented test manually:\n" +
+                        "1. Connect a device/emulator\n" +
+                        "2. Run: ./gradlew :sample-app:connectedDebugAndroidTest\n" +
+                        "3. Copy results.tsv to .compose-workbench/results.tsv\n" +
+                        "4. Click Run verification",
+                    "No Android SDK",
+                    JOptionPane.WARNING_MESSAGE
+                )
+                return@button
+            }
+            if (!AdbHelper.hasConnectedDevice()) {
+                JOptionPane.showMessageDialog(
+                    this,
+                    "No Android device/emulator connected via adb.\n" +
+                        "Please connect a device and run:\n" +
+                        "  ./gradlew :sample-app:connectedDebugAndroidTest\n" +
+                        "Then copy results.tsv to .compose-workbench/results.tsv",
+                    "No Device",
+                    JOptionPane.WARNING_MESSAGE
+                )
+                return@button
+            }
+            val pulled = AdbHelper.pullResultsFromDevice(projectDir)
+            if (pulled != null) {
+                JOptionPane.showMessageDialog(
+                    this,
+                    "Results pulled from device to:\n$pulled\n\n" +
+                        "Click 'Run verification' to analyze them.",
+                    "Results Pulled",
+                    JOptionPane.INFORMATION_MESSAGE
+                )
+                store.selectedId?.let { store.runVerification(it, engineFactory()) }
+            } else {
+                JOptionPane.showMessageDialog(
+                    this,
+                    "Could not find results file on device.\n" +
+                        "Make sure you ran the instrumented test:\n" +
+                        "  ./gradlew :sample-app:connectedDebugAndroidTest",
+                    "No Results",
+                    JOptionPane.WARNING_MESSAGE
+                )
+            }
+        }
+        val runDemo = button("Run demo verification", "btn-demo-verification") {
+            val id = store.selectedId ?: return@button
+            store.runVerification(id, DemoFixtureEngine(DemoFixtureEngine.Scenario.ALL_PASS))
+        }
         val review = button("Review findings", "btn-review-findings") { store.goTo(Stage.DIAGNOSE) }
         val reset = button("Reset workflow", "btn-reset") { store.reset() }
         val reportFixApplied = button("Report fix applied", "btn-report-fix-applied") {
@@ -320,13 +375,47 @@ class WorkbenchPanel(
                 }
             }
         }
+
+        // Help panel shown when no verification results exist
+        val helpPanel = JPanel(BorderLayout(8, 8)).apply {
+            border = BorderFactory.createTitledBorder("How to get verification results")
+            val instructions = JTextArea(
+                "Verification needs real instrumented test results from an Android device/emulator.\n\n" +
+                "Step 1: Run the instrumented test:\n" +
+                "  ./gradlew :sample-app:connectedDebugAndroidTest\n\n" +
+                "Step 2: Copy results to .compose-workbench/results.tsv\n" +
+                "  (or click 'Pull results from device' below if adb is available)\n\n" +
+                "Step 3: Click 'Run verification' to analyze the results\n\n" +
+                "Or click 'Run demo verification' to test with sample data."
+            ).apply {
+                isEditable = false
+                isOpaque = false
+                lineWrap = true
+                wrapStyleWord = true
+                font = font.deriveFont(Font.PLAIN, 12f)
+            }
+            val btnPanel = JPanel(FlowLayout(FlowLayout.LEFT)).apply {
+                add(pullFromDevice)
+                add(runDemo)
+            }
+            add(instructions, BorderLayout.NORTH)
+            add(btnPanel, BorderLayout.SOUTH)
+        }
+
+        val resultsSplit = JSplitPane(JSplitPane.VERTICAL_SPLIT, JScrollPane(overviewTable), JScrollPane(resultsTable)).apply { resizeWeight = 0.25 }
+
         init {
             name = "card-VERIFY"; border = BorderFactory.createEmptyBorder(8, 8, 8, 8)
             val north = JPanel(GridLayout(0, 1)).apply { add(header); add(status); add(patchStatus); add(summary); add(engineLabel); add(historyLabel) }
             add(north, BorderLayout.NORTH)
-            add(JSplitPane(JSplitPane.VERTICAL_SPLIT, JScrollPane(overviewTable), JScrollPane(resultsTable)).apply { resizeWeight = 0.25 }, BorderLayout.CENTER)
+            add(centerPanel, BorderLayout.CENTER)
+
+            centerPanel.add(helpPanel, "help")
+            centerPanel.add(resultsSplit, "results")
+
             add(JPanel(FlowLayout(FlowLayout.RIGHT)).apply { add(review); add(reset); add(apply); add(run); add(reportFixApplied); add(reportFixIssue) }, BorderLayout.SOUTH)
         }
+
         fun update() {
             val f = store.selected; val st = f?.let { store.state(it.id) }
             header.text = if (f == null) "No finding selected" else "${f.id} \u00B7 ${f.title}"
@@ -347,6 +436,13 @@ class WorkbenchPanel(
             run.isEnabled = true
             reportFixApplied.isEnabled = approved && st.manualFixApplied != true
             reportFixIssue.isEnabled = approved && st.manualFixApplied == true
+
+            // Switch between help panel and results
+            val cardLayout = centerPanel.layout as java.awt.CardLayout
+            cardLayout.show(centerPanel, if (run0 == null) "help" else "results")
+
+            // Enable pull-from-device only if adb + device available
+            pullFromDevice.isEnabled = AdbHelper.adbPath != null && AdbHelper.hasConnectedDevice()
         }
     }
 }

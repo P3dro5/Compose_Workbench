@@ -28,7 +28,7 @@ fun registerUiTests(s: Suite) {
         val texts = all(p.verifyCard).mapNotNull { (it as? javax.swing.AbstractButton)?.text ?: (it as? JLabel)?.text }
         expect(texts.none { it.contains("Back to Repair", ignoreCase = true) }) { "found: $texts" }
         expect(all(p.verifyCard).filterIsInstance<JButton>().none { it.text.contains("Repair", ignoreCase = true) && it.text.contains("Back", ignoreCase = true) })
-        expectEq(listOf("Apply approved patch", "Report fix applied", "Report fix issue", "Reset workflow", "Review findings", "Run verification").sorted(), all(p.verifyCard).filterIsInstance<JButton>().filter { it.name?.startsWith("btn-") == true }.map { it.text }.sorted())
+        expectEq(listOf("Apply approved patch", "Pull results from device", "Report fix applied", "Report fix issue", "Reset workflow", "Review findings", "Run demo verification", "Run verification").sorted(), all(p.verifyCard).filterIsInstance<JButton>().filter { it.name?.startsWith("btn-") == true }.map { it.text }.sorted())
     }
     s.test("ui: stage indicator stages are clickable buttons") {
         val p = panel(); Stage.values().forEach { 
