@@ -74,7 +74,7 @@ object AdbHelper {
     }
 
     /** Runs an adb command and returns its stdout. */
-    private fun runCommand(vararg args: String): String {
+    fun runCommand(vararg args: String): String {
         val pb = ProcessBuilder(*args).redirectErrorStream(true)
         val process = pb.start()
         val output = process.inputStream.bufferedReader().readText()

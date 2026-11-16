@@ -283,6 +283,7 @@ class WorkbenchPanel(
         val summary = JLabel(" ").apply { name = "verify-summary" }
         val engineLabel = JLabel(" ").apply { name = "verify-engine" }
         val historyLabel = JLabel(" ").apply { name = "verify-history" }
+        var run: JButton? = null
         val overview = object : DefaultTableModel(arrayOf("ID", "Status", "Patch"), 0) { override fun isCellEditable(r: Int, c: Int) = false }
         val overviewTable = JTable(overview).apply { name = "verify-overview" }
         val resultsModel = object : DefaultTableModel(arrayOf("Finding", "Target", "Font scale", "Probe", "Points (root px)", "Status", "Expected", "Observed", "Evidence / error"), 0) { override fun isCellEditable(r: Int, c: Int) = false }
@@ -300,7 +301,6 @@ class WorkbenchPanel(
         }
         val centerPanel = JPanel(CardLayout())
         val apply = button("Apply approved patch", "btn-apply-patch") { store.selectedId?.let { store.applyApprovedPatch(it) } }
-        val run = button("Run verification", "btn-run-verification") { store.selectedId?.let { store.runVerification(it, engineFactory()) } }
         val pullFromDevice = button("Pull results from device", "btn-pull-results") {
             val id = store.selectedId ?: return@button
             val projectDir = store.selected?.let { File(it.location.file).parentFile } ?: File(System.getProperty("user.dir"))
@@ -413,6 +413,85 @@ class WorkbenchPanel(
             centerPanel.add(helpPanel, "help")
             centerPanel.add(resultsSplit, "results")
 
+            run = button("Run verification", "btn-run-verification") {
+                val id = store.selectedId ?: return@button
+                val projectDir = store.selected?.let { File(it.location.file).parentFile } ?: File(System.getProperty("user.dir"))
+                val adb = AdbHelper.adbPath
+                val hasDevice = adb != null && AdbHelper.hasConnectedDevice()
+                if (!hasDevice) {
+                    // No device available - proceed with unavailable engine
+                    store.runVerification(id, engineFactory())
+                    return@button
+                }
+                val gradlew = File(projectDir, "gradlew")
+                if (!gradlew.isFile) {
+                    JOptionPane.showMessageDialog(
+                        this,
+                        "gradlew not found in project directory.\n" +
+                            "Run: ./gradlew :sample-app:connectedDebugAndroidTest manually",
+                        "Missing gradlew",
+                        JOptionPane.WARNING_MESSAGE
+                    )
+                    return@button
+                }
+                val confirm = JOptionPane.showConfirmDialog(
+                    this,
+                    "This will run the instrumented touch-target matrix test on the connected device.\n" +
+                        "This may take a few minutes. Continue?",
+                    "Run Instrumented Test",
+                    JOptionPane.YES_NO_OPTION,
+                    JOptionPane.QUESTION_MESSAGE
+                )
+                if (confirm != JOptionPane.YES_OPTION) return@button
+                run?.isEnabled = false
+                messageLabel.text = "Running instrumented test on device..."
+                Thread {
+                    try {
+                        SwingUtilities.invokeLater { messageLabel.text = "Running ./gradlew :sample-app:connectedDebugAndroidTest..." }
+                        val gradleOutput = AdbHelper.runCommand(gradlew.absolutePath, ":sample-app:connectedDebugAndroidTest")
+                        SwingUtilities.invokeLater { messageLabel.text = gradleOutput.takeLast(300) }
+                        SwingUtilities.invokeLater { messageLabel.text = "Pulling results from device..." }
+                        val pulled = AdbHelper.pullResultsFromDevice(projectDir)
+                        if (pulled == null) {
+                            SwingUtilities.invokeLater {
+                                messageLabel.text = "ERROR: Could not retrieve results from device."
+                                run?.isEnabled = true
+                            }
+                            JOptionPane.showMessageDialog(
+                                this@VerifyCard,
+                                "Could not retrieve results from device.\n" +
+                                    "Make sure the instrumented test ran successfully.",
+                                "No Results",
+                                JOptionPane.WARNING_MESSAGE
+                            )
+                            return@Thread
+                        }
+                        SwingUtilities.invokeLater { messageLabel.text = "Results retrieved: $pulled" }
+                        SwingUtilities.invokeLater {
+                            store.runVerification(id, engineFactory())
+                            JOptionPane.showMessageDialog(
+                                this@VerifyCard,
+                                "Verification complete! Check the results table above.",
+                                "Verification Complete",
+                                JOptionPane.INFORMATION_MESSAGE
+                            )
+                            run?.isEnabled = true
+                        }
+                    } catch (e: Exception) {
+                        SwingUtilities.invokeLater {
+                            messageLabel.text = "Verification failed: ${e.message}"
+                            run?.isEnabled = true
+                        }
+                        JOptionPane.showMessageDialog(
+                            this@VerifyCard,
+                            "Verification failed: ${e.message}",
+                            "Verification Error",
+                            JOptionPane.ERROR_MESSAGE
+                        )
+                    }
+                }.start()
+            }
+
             add(JPanel(FlowLayout(FlowLayout.RIGHT)).apply { add(review); add(reset); add(apply); add(run); add(reportFixApplied); add(reportFixIssue) }, BorderLayout.SOUTH)
         }
 
@@ -433,7 +512,7 @@ class WorkbenchPanel(
             run0?.results?.forEach { r -> resultsModel.addRow(arrayOf(r.case.findingId, r.case.targetName, "%.1fx".format(java.util.Locale.ROOT, r.case.fontScale), r.case.probe.label, r.points.joinToString("; ") { "(%.0f, %.0f)".format(java.util.Locale.ROOT, it.x, it.y) }.ifEmpty { "-" }, r.status.name, r.expected, r.observed, listOfNotNull(r.evidence.ifBlank { null }, r.error).joinToString(" | "))) }
             val approved = st?.approval == ApprovalState.APPROVED
             apply.isEnabled = approved && st.patch != PatchState.APPLIED
-            run.isEnabled = true
+            run?.isEnabled = true
             reportFixApplied.isEnabled = approved && st.manualFixApplied != true
             reportFixIssue.isEnabled = approved && st.manualFixApplied == true
 
