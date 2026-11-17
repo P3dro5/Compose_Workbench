@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.compose.material3.minimumInteractiveComponentSize
 
 @Composable
 fun FavoriteCard(onFavorite: () -> Unit, onShare: () -> Unit) {
@@ -19,7 +20,7 @@ fun FavoriteCard(onFavorite: () -> Unit, onShare: () -> Unit) {
         Icon(
             imageVector = Icons.Filled.Share,
             contentDescription = "Share",
-            modifier = Modifier
+            modifier = Modifier.minimumInteractiveComponentSize()
                 .testTag("share")
                 .clickable { onShare() }
                 .size(32.dp)
