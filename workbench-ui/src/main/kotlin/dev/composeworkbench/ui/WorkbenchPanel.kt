@@ -14,7 +14,8 @@ import javax.swing.table.DefaultTableModel
 class WorkbenchPanel(
     private val store: WorkbenchStoreHandle,
     private val engineFactory: () -> VerificationEngine,
-    private val bannerText: String? = null
+    private val bannerText: String? = null,
+    private val projectDir: File = File(System.getProperty("user.dir"))
 ) : JPanel(BorderLayout()) {
 
     private val cards = CardLayout()
@@ -92,14 +93,27 @@ class WorkbenchPanel(
         val model = object : DefaultTableModel(arrayOf("ID", "Severity", "Title", "Location", "Status"), 0) { override fun isCellEditable(r: Int, c: Int) = false }
         val table = JTable(model).apply { name = "findings-table"; selectionModel.selectionMode = ListSelectionModel.SINGLE_SELECTION }
         val details = wrapped(JTextArea()).apply { name = "diagnose-details" }
+        val verificationFailures = wrapped(JTextArea()).apply { name = "diagnose-verification-failures" }
         val suggest = button("Suggest fix", "btn-suggest-fix") { store.selectedId?.let { store.suggestFix(it) } }
+        val suggestFromVerification = button("Suggest fix for verification failures", "btn-suggest-fix-verification") {
+            store.selectedId?.let { store.suggestFixFromVerification(it) }
+        }
         private var updating = false
         init {
             name = "card-DIAGNOSE"; border = BorderFactory.createEmptyBorder(8, 8, 8, 8)
             table.selectionModel.addListSelectionListener { e -> if (!e.valueIsAdjusting && !updating) { val r = table.selectedRow; if (r >= 0) store.select(model.getValueAt(r, 0) as String) } }
-            val split = JSplitPane(JSplitPane.VERTICAL_SPLIT, JScrollPane(table), JScrollPane(details)).apply { resizeWeight = 0.45 }
+            val lower = JSplitPane(JSplitPane.VERTICAL_SPLIT,
+                JPanel(BorderLayout()).apply {
+                    add(JLabel("Finding details").apply { horizontalAlignment = SwingConstants.CENTER; font = font.deriveFont(Font.BOLD) }, BorderLayout.NORTH)
+                    add(JScrollPane(details), BorderLayout.CENTER)
+                },
+                JPanel(BorderLayout()).apply {
+                    add(JLabel("Verification failures (exact cases that did not pass)").apply { horizontalAlignment = SwingConstants.CENTER; font = font.deriveFont(Font.BOLD) }, BorderLayout.NORTH)
+                    add(JScrollPane(verificationFailures), BorderLayout.CENTER)
+                }).apply { resizeWeight = 0.5 }
+            val split = JSplitPane(JSplitPane.VERTICAL_SPLIT, JScrollPane(table), lower).apply { resizeWeight = 0.35 }
             add(split, BorderLayout.CENTER)
-            add(JPanel(FlowLayout(FlowLayout.RIGHT)).apply { add(suggest) }, BorderLayout.SOUTH)
+            add(JPanel(FlowLayout(FlowLayout.RIGHT)).apply { add(suggestFromVerification); add(suggest) }, BorderLayout.SOUTH)
         }
         fun update() {
             updating = true
@@ -114,7 +128,28 @@ class WorkbenchPanel(
                 f.evidence.forEach { append("  [${it.kind.label}] ${it.detail}\n") }
             }
             details.caretPosition = 0
+
+            val issues = store.selectedId?.let { store.unresolvedIssues(it) } ?: emptyList()
+            verificationFailures.text = when {
+                f == null -> "No finding selected."
+                issues.isEmpty() -> "No unresolved verification cases for ${f.id}.\nRun verification from the Verify stage to check runtime behavior."
+                else -> buildString {
+                    append("${issues.size} unresolved verification case(s) for ${f.id}:\n\n")
+                    issues.forEachIndexed { i, issue ->
+                        append("${i + 1}. ${issue.title} [${issue.status}]\n")
+                        append("   What is wrong: ${issue.diagnosis}\n")
+                        append("   Expected: ${issue.expected}\n")
+                        append("   Observed: ${issue.observed}\n")
+                        append("   Suggested fix: ${issue.suggestedFix}\n")
+                        if (!issue.evidence.isBlank()) append("   Evidence: ${issue.evidence}\n")
+                        if (!issue.error.isNullOrBlank()) append("   Error: ${issue.error}\n")
+                        append("\n")
+                    }
+                }
+            }
+            verificationFailures.caretPosition = 0
             suggest.isEnabled = f != null
+            suggestFromVerification.isEnabled = f != null && issues.isNotEmpty()
         }
     }
 
@@ -303,7 +338,7 @@ class WorkbenchPanel(
         val apply = button("Apply approved patch", "btn-apply-patch") { store.selectedId?.let { store.applyApprovedPatch(it) } }
         val pullFromDevice = button("Pull results from device", "btn-pull-results") {
             val id = store.selectedId ?: return@button
-            val projectDir = store.selected?.let { File(it.location.file).parentFile } ?: File(System.getProperty("user.dir"))
+            val projectDir = this@WorkbenchPanel.projectDir
             val adb = AdbHelper.adbPath
             if (adb == null) {
                 JOptionPane.showMessageDialog(
@@ -356,6 +391,58 @@ class WorkbenchPanel(
             store.runVerification(id, DemoFixtureEngine(DemoFixtureEngine.Scenario.ALL_PASS))
         }
         val review = button("Review findings", "btn-review-findings") { store.goTo(Stage.DIAGNOSE) }
+        val fixFailures = button("Fix verification failures", "btn-fix-verification") {
+            store.selectedId?.let { store.suggestFixFromVerification(it) }
+        }
+        val advance = button("Advance and approve", "btn-advance-and-approve") {
+            val id = store.selectedId ?: return@button
+            val st = store.state(id)
+            if (st.approval != ApprovalState.APPROVED) {
+                JOptionPane.showMessageDialog(
+                    this,
+                    "The repair must be approved on the Repair stage first.",
+                    "Not Approved",
+                    JOptionPane.WARNING_MESSAGE
+                )
+                return@button
+            }
+            if (st.closed) {
+                store.reopenIssue(id)
+                return@button
+            }
+            val issues = store.unresolvedIssues(id)
+            val passed = store.verificationPassed(id)
+            if (passed) {
+                store.closeIssue(id)
+                return@button
+            }
+            val sum = st.lastRun?.summary
+            val details = buildString {
+                if (sum == null) append("Verification has not been run for this finding.\n\n")
+                else append("${sum.failed} failed, ${sum.inconclusive} inconclusive, ${sum.notRun} not run out of ${sum.total} cases.\n\n")
+                if (issues.isNotEmpty()) {
+                    append("Unresolved issues:\n")
+                    issues.take(6).forEach { append("  - ${it.diagnosis}\n") }
+                    if (issues.size > 6) append("  ... and ${issues.size - 6} more\n")
+                }
+            }
+            val options = arrayOf("Accept and approve anyway", "Cancel", "Show unresolved issues")
+            val choice = JOptionPane.showOptionDialog(
+                this,
+                "Not all verification tests passed.\n\n$details\nWhat would you like to do?",
+                "Unresolved verification issues",
+                JOptionPane.DEFAULT_OPTION,
+                JOptionPane.WARNING_MESSAGE,
+                null,
+                options,
+                options[1]
+            )
+            when (choice) {
+                0 -> store.closeIssue(id)
+                2 -> store.suggestFixFromVerification(id)
+                else -> { /* cancel: stay on Verify */ }
+            }
+        }
         val reset = button("Reset workflow", "btn-reset") { store.reset() }
         val reportFixApplied = button("Report fix applied", "btn-report-fix-applied") {
             store.selectedId?.let { id ->
@@ -380,13 +467,12 @@ class WorkbenchPanel(
         val helpPanel = JPanel(BorderLayout(8, 8)).apply {
             border = BorderFactory.createTitledBorder("How to get verification results")
             val instructions = JTextArea(
-                "Verification needs real instrumented test results from an Android device/emulator.\n\n" +
-                "Step 1: Run the instrumented test:\n" +
-                "  ./gradlew :sample-app:connectedDebugAndroidTest\n\n" +
-                "Step 2: Copy results to .compose-workbench/results.tsv\n" +
-                "  (or click 'Pull results from device' below if adb is available)\n\n" +
-                "Step 3: Click 'Run verification' to analyze the results\n\n" +
-                "Or click 'Run demo verification' to test with sample data."
+                "Verification runs the instrumented test on a connected device/emulator and reports the exact cases that failed.\n\n" +
+                "Step 1: Connect a device/emulator, then click 'Run verification' above.\n" +
+                "        The test runs, results are saved to .compose-workbench/results.tsv, and failures are diagnosed.\n\n" +
+                "Step 2: If cases fail, click 'Fix verification failures' to review a proposed fix, approve it, then run verification again.\n\n" +
+                "Step 3: When all cases pass, click 'Close and approve'. You may still advance with unresolved issues via a confirmation dialog.\n\n" +
+                "No device? Click 'Pull results from device' (adb) or 'Run demo verification' (test data only)."
             ).apply {
                 isEditable = false
                 isOpaque = false
@@ -415,7 +501,7 @@ class WorkbenchPanel(
 
             run = button("Run verification", "btn-run-verification") {
                 val id = store.selectedId ?: return@button
-                val projectDir = store.selected?.let { File(it.location.file).parentFile } ?: File(System.getProperty("user.dir"))
+                val projectDir = this@WorkbenchPanel.projectDir
                 val adb = AdbHelper.adbPath
                 val hasDevice = adb != null && AdbHelper.hasConnectedDevice()
                 if (!hasDevice) {
@@ -492,7 +578,7 @@ class WorkbenchPanel(
                 }.start()
             }
 
-            add(JPanel(FlowLayout(FlowLayout.RIGHT)).apply { add(review); add(reset); add(apply); add(run); add(reportFixApplied); add(reportFixIssue) }, BorderLayout.SOUTH)
+            add(JPanel(FlowLayout(FlowLayout.RIGHT)).apply { add(review); add(fixFailures); add(advance); add(reset); add(apply); add(run); add(reportFixApplied); add(reportFixIssue) }, BorderLayout.SOUTH)
         }
 
         fun update() {
@@ -511,10 +597,24 @@ class WorkbenchPanel(
             resultsModel.rowCount = 0
             run0?.results?.forEach { r -> resultsModel.addRow(arrayOf(r.case.findingId, r.case.targetName, "%.1fx".format(java.util.Locale.ROOT, r.case.fontScale), r.case.probe.label, r.points.joinToString("; ") { "(%.0f, %.0f)".format(java.util.Locale.ROOT, it.x, it.y) }.ifEmpty { "-" }, r.status.name, r.expected, r.observed, listOfNotNull(r.evidence.ifBlank { null }, r.error).joinToString(" | "))) }
             val approved = st?.approval == ApprovalState.APPROVED
+            val issues = store.selectedId?.let { store.unresolvedIssues(it) } ?: emptyList()
+            val passed = store.selectedId?.let { store.verificationPassed(it) } == true
             apply.isEnabled = approved && st.patch != PatchState.APPLIED
             run?.isEnabled = true
             reportFixApplied.isEnabled = approved && st.manualFixApplied != true
             reportFixIssue.isEnabled = approved && st.manualFixApplied == true
+            fixFailures.isEnabled = issues.isNotEmpty()
+            advance.isEnabled = approved && run0 != null
+            advance.text = when {
+                st?.closed == true -> "Reopen issue"
+                passed -> "Close and approve"
+                else -> "Advance and approve"
+            }
+            advance.toolTipText = when {
+                st?.closed == true -> "Reopen this issue to rerun verification after another fix."
+                passed -> "All verification cases passed; close and approve this issue."
+                else -> "If not all cases passed, a confirmation dialog lets you accept, cancel, or show unresolved issues."
+            }
 
             // Switch between help panel and results
             val cardLayout = centerPanel.layout as java.awt.CardLayout

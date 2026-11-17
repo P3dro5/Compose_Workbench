@@ -28,7 +28,7 @@ fun registerUiTests(s: Suite) {
         val texts = all(p.verifyCard).mapNotNull { (it as? javax.swing.AbstractButton)?.text ?: (it as? JLabel)?.text }
         expect(texts.none { it.contains("Back to Repair", ignoreCase = true) }) { "found: $texts" }
         expect(all(p.verifyCard).filterIsInstance<JButton>().none { it.text.contains("Repair", ignoreCase = true) && it.text.contains("Back", ignoreCase = true) })
-        expectEq(listOf("Apply approved patch", "Pull results from device", "Report fix applied", "Report fix issue", "Reset workflow", "Review findings", "Run demo verification", "Run verification").sorted(), all(p.verifyCard).filterIsInstance<JButton>().filter { it.name?.startsWith("btn-") == true }.map { it.text }.sorted())
+        expectEq(listOf("Advance and approve", "Apply approved patch", "Fix verification failures", "Pull results from device", "Report fix applied", "Report fix issue", "Reset workflow", "Review findings", "Run demo verification", "Run verification").sorted(), all(p.verifyCard).filterIsInstance<JButton>().filter { it.name?.startsWith("btn-") == true }.map { it.text }.sorted())
     }
     s.test("ui: stage indicator stages are clickable buttons") {
         val p = panel(); Stage.values().forEach { 
@@ -93,5 +93,29 @@ fun registerUiTests(s: Suite) {
         val t = find(p, "repair-text", JTextArea::class.java).text
         for (needle in listOf("CW-001", "Problem", "Evidence", "[Heuristic]", "[Not run]", "Location", "FavoriteCard.kt", "Proposed repair", "Why this helps")) expect(t.contains(needle)) { "missing '$needle' in:\n$t" }
         expect(!find(p, "repair-diff", JTextArea::class.java).text.contains("a//"))
+    }
+
+    s.test("ui: Diagnose shows exact verification failures after a failed run") {
+        val p = panel(); click(p, "btn-to-diagnose"); click(p, "btn-suggest-fix"); click(p, "btn-approve"); click(p, "btn-run-verification")
+        click(p, "btn-review-findings")
+        val t = find(p, "diagnose-verification-failures", JTextArea::class.java).text
+        expect(t.contains("unresolved verification case") && t.contains("1.5x") && t.contains("Suggested fix")) { t }
+        expect(find(p, "btn-suggest-fix-verification", JButton::class.java).isEnabled)
+    }
+    s.test("ui: Verify advance button text reflects verification state; fix button navigates to Repair") {
+        val p = panel(); click(p, "btn-to-diagnose"); click(p, "btn-suggest-fix"); click(p, "btn-approve")
+        val advance = find(p, "btn-advance-and-approve", JButton::class.java)
+        expect(!advance.isEnabled) { "advance should require a verification run" }
+        click(p, "btn-run-verification")
+        expectEq("Advance and approve", advance.text)
+        expect(find(p, "btn-fix-verification", JButton::class.java).isEnabled)
+        click(p, "btn-fix-verification")
+        expect(stageLabel(p, "stage-REPAIR") == "Repair")
+        expect(find(p, "repair-text", JTextArea::class.java).text.contains("failing verification"))
+    }
+    s.test("ui: all-pass verification enables 'Close and approve' with no unresolved issues") {
+        val p = panel(DemoFixtureEngine.Scenario.ALL_PASS); click(p, "btn-to-diagnose"); click(p, "btn-suggest-fix"); click(p, "btn-approve"); click(p, "btn-run-verification")
+        expectEq("Close and approve", find(p, "btn-advance-and-approve", JButton::class.java).text)
+        expect(!find(p, "btn-fix-verification", JButton::class.java).isEnabled)
     }
 }

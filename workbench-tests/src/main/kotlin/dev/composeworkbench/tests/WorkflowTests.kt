@@ -134,5 +134,54 @@ fun registerWorkflowTests(s: Suite) {
         expect(!x.store.state(x.id1).resolved); expectEq(2, x.store.state(x.id1).runs.size)
     }
 
+    s.test("diagnosis: failed run yields actionable unresolved issues with exact cases") {
+        val x = Fixture(); x.store.suggestFix(x.id1); x.store.approve(x.id1)
+        x.store.runVerification(x.id1, DemoFixtureEngine(DemoFixtureEngine.Scenario.ILLUSTRATED_FAILURES))
+        expectEq(1, x.store.unresolvedIssues(x.id1).size, "CW-001 should have one demo failure")
+        val issue = x.store.unresolvedIssues(x.id1).first()
+        expect(issue.diagnosis.contains("1.5x") && issue.diagnosis.contains("right edge")) { issue.diagnosis }
+        expect(issue.suggestedFix.isNotBlank())
+        expect(issue.expected.isNotBlank() && issue.observed.isNotBlank())
+    }
+    s.test("diagnosis: passing run yields no unresolved issues and verificationPassed true") {
+        val x = Fixture(); x.store.suggestFix(x.id2); x.store.approve(x.id2)
+        x.store.runVerification(x.id2, DemoFixtureEngine(DemoFixtureEngine.Scenario.ALL_PASS))
+        expect(x.store.verificationPassed(x.id2)); expectEq(0, x.store.unresolvedIssues(x.id2).size)
+        expectEq(28, x.store.matrixSize(x.id2))
+    }
+    s.test("closure: closeIssue requires approval, sets closed, reopen clears it") {
+        val x = Fixture()
+        expect(!x.store.closeIssue(x.id1)) { "cannot close before approval" }
+        x.store.suggestFix(x.id2); x.store.approve(x.id2)
+        x.store.runVerification(x.id2, DemoFixtureEngine(DemoFixtureEngine.Scenario.ALL_PASS))
+        expect(x.store.closeIssue(x.id2)); expect(x.store.state(x.id2).closed)
+        expect(x.store.state(x.id2).statusLabel().contains("Closed"))
+        expect(x.store.reopenIssue(x.id2)); expect(!x.store.state(x.id2).closed)
+    }
+    s.test("closure: can close despite failed verification (explicit user acceptance)") {
+        val x = Fixture(); x.store.suggestFix(x.id1); x.store.approve(x.id1)
+        x.store.runVerification(x.id1, DemoFixtureEngine(DemoFixtureEngine.Scenario.ILLUSTRATED_FAILURES))
+        expect(!x.store.verificationPassed(x.id1))
+        expect(x.store.closeIssue(x.id1))
+        expect(x.store.state(x.id1).statusLabel().contains("Closed") && x.store.state(x.id1).statusLabel().contains("Unresolved"))
+    }
+    s.test("verification-driven fix: proposal from failures navigates to Repair without writing source") {
+        val x = Fixture(); x.store.suggestFix(x.id1); x.store.approve(x.id1)
+        x.store.runVerification(x.id1, DemoFixtureEngine(DemoFixtureEngine.Scenario.ILLUSTRATED_FAILURES))
+        val before = x.file.readText()
+        expect(x.store.suggestFixFromVerification(x.id1))
+        expectEq(Stage.REPAIR, x.store.stage)
+        val st = x.store.state(x.id1)
+        expectEq(ApprovalState.AWAITING_APPROVAL, st.approval)
+        expect(st.proposal != null && st.proposal!!.summary.contains("failing verification"))
+        expect(st.proposal!!.verificationScenarioIds.isNotEmpty())
+        expectEq(before, x.file.readText(), "verification-driven proposal must not write source")
+    }
+    s.test("verification-driven fix: no-op when there are no unresolved issues") {
+        val x = Fixture(); x.store.suggestFix(x.id2); x.store.approve(x.id2)
+        x.store.runVerification(x.id2, DemoFixtureEngine(DemoFixtureEngine.Scenario.ALL_PASS))
+        expect(!x.store.suggestFixFromVerification(x.id2)) { "no failing cases => no verification-driven fix" }
+    }
+
     registerUiTests(s)
 }

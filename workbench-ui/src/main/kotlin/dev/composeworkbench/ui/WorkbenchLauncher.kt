@@ -14,13 +14,13 @@ object WorkbenchFactory {
             if (results.isFile) ResultsFileEngine(results)
             else UnavailableEngine("No instrumented results found at ${results.path}. Run the instrumented matrix test on a device/emulator and copy its output there.")
         }
-        return WorkbenchPanel(WorkbenchStoreHandle(WorkflowStore(findings)), engine)
+        return WorkbenchPanel(WorkbenchStoreHandle(WorkflowStore(findings)), engine, projectDir = projectDir)
     }
 
     /** Demo mode: clearly labelled illustrative data with a scripted engine. */
     fun demo(workDir: File, scenario: DemoFixtureEngine.Scenario = DemoFixtureEngine.Scenario.ILLUSTRATED_FAILURES): WorkbenchPanel {
         val (_, findings) = DemoData.create(workDir)
-        return WorkbenchPanel(WorkbenchStoreHandle(WorkflowStore(findings)), { DemoFixtureEngine(scenario) }, DemoData.BANNER)
+        return WorkbenchPanel(WorkbenchStoreHandle(WorkflowStore(findings)), { DemoFixtureEngine(scenario) }, DemoData.BANNER, workDir)
     }
 }
 

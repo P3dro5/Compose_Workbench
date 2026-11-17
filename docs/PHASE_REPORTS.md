@@ -96,3 +96,16 @@ If you want to extend the project beyond the Implementation Prompt, the remainin
 3. **Replace `java.io` patch writes with IDE `WriteCommandAction`** when running inside IntelliJ, so the VFS refreshes automatically (documented limitation #7 in KNOWN_LIMITATIONS.md).
 4. **Implement clipping / parent-constraint analysis** (documented limitation #5).
 5. **Add JUnit migration** (documented limitation #4) if JUnit becomes available.
+
+---
+
+## End-to-end verification loop (post-implementation)
+
+The Verify stage is now an actionable repair loop, not just a results viewer:
+
+1. **Run verification** runs `./gradlew :sample-app:connectedDebugAndroidTest` on a connected device/emulator, pulls the instrumented results into `<project>/.compose-workbench/results.tsv`, and analyzes the 7-probe × 4-font-scale matrix. With no device, existing results are reused; otherwise the run is honestly reported as *not run*.
+2. **Diagnose shows exactly what is wrong** — every failing/inconclusive/not-run case is rendered on the Diagnose card with the font scale, probe, expected vs. observed behavior, evidence, and a concrete fix hint (`UnresolvedIssue` / `VerificationDiagnosis` in `Verification.kt`).
+3. **Fix verification failures** generates a repair proposal from the actual failing cases (`WorkflowStore.suggestFixFromVerification`), navigates back to Repair with the code diff and visual preview, and lets the user approve and auto-apply the patch — then run verification again.
+4. **Close and approve** appears when all 28 cases pass and formally closes the issue (`WorkflowStore.closeIssue`). If cases remain unresolved, **Advance and approve** shows a confirmation dialog with *Accept and approve anyway*, *Cancel*, and *Show unresolved issues*; the last option navigates straight to a verification-driven fix proposal. A closed issue can be reopened to rerun verification after further changes.
+
+New tests cover diagnosis generation, closure/reopen, verification-driven proposals, and the UI buttons (69 tests executed, 69 passed, 0 failed).

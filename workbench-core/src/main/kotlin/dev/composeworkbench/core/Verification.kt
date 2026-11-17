@@ -172,6 +172,56 @@ class ResultsFileEngine(private val file: File) : VerificationEngine {
     }
 }
 
+/**
+ * A single failing or unresolved verification case, with a human-readable diagnosis
+ * and a suggested fix. Produced from real result rows; never fabricates outcomes.
+ */
+data class UnresolvedIssue(
+    val case: MatrixCase,
+    val status: ResultStatus,
+    val expected: String,
+    val observed: String,
+    val evidence: String,
+    val error: String?,
+    /** What went wrong, in plain language. */
+    val diagnosis: String,
+    /** What to change in the code to address this case. */
+    val suggestedFix: String
+) {
+    val title: String get() = "${case.probe.label} @ ${"%.1f".format(java.util.Locale.ROOT, case.fontScale)}x"
+}
+
+/** Turns raw verification failures into actionable, ordered diagnoses. */
+object VerificationDiagnosis {
+    fun of(run: VerificationRun): List<UnresolvedIssue> = run.results
+        .filter { it.status != ResultStatus.PASS }
+        .sortedWith(compareBy({ it.case.fontScale }, { it.case.probe.name }))
+        .map { r ->
+            val scale = "%.1f".format(java.util.Locale.ROOT, r.case.fontScale)
+            val probe = r.case.probe.label.lowercase()
+            val diagnosis = when (r.status) {
+                ResultStatus.FAIL -> if (r.case.probe.negative)
+                    "At ${scale}x font scale, a tap outside '${r.case.targetName}' incorrectly triggered its click action."
+                else
+                    "At ${scale}x font scale, a tap on '${r.case.targetName}' ($probe) did not trigger the expected click action. Observed: ${r.observed.ifBlank { "no click" }}."
+                ResultStatus.INCONCLUSIVE ->
+                    "At ${scale}x font scale, the $probe probe could not be classified: ${r.error ?: r.evidence.ifBlank { "unknown reason" }}."
+                ResultStatus.NOT_RUN ->
+                    "At ${scale}x font scale, the $probe probe was not executed: ${r.error ?: "no result in results.tsv"}."
+                ResultStatus.PASS -> "" // unreachable: filtered above
+            }
+            val suggestedFix = when {
+                r.case.probe.negative ->
+                    "Add spacing or clipping so taps outside the target bounds do not reach its click handler."
+                r.case.probe in listOf(Probe.RIGHT_EDGE, Probe.LEFT_EDGE, Probe.TOP_EDGE, Probe.BOTTOM_EDGE, Probe.CORNERS) ->
+                    "Enlarge the touch target (minimumInteractiveComponentSize) and check spacing from adjacent targets."
+                else ->
+                    "Review the click handler and layout bounds of '${r.case.targetName}' at this font scale."
+            }
+            UnresolvedIssue(r.case, r.status, r.expected, r.observed, r.evidence, r.error, diagnosis, suggestedFix)
+        }
+}
+
 /** Scripted results for demos and tests. Every result is tagged DEMO_FIXTURE and is never real test output. */
 class DemoFixtureEngine(private val scenario: Scenario) : VerificationEngine {
     enum class Scenario { ILLUSTRATED_FAILURES, ALL_PASS, PARTIAL }

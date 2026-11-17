@@ -27,12 +27,16 @@ data class IssueState(
     val runs: List<VerificationRun> = emptyList(),
     /** Runs executed before approval (baseline evidence, never counted toward verification). */
     val baselineRuns: List<VerificationRun> = emptyList(),
-    val lastRun: VerificationRun? = null
+    val lastRun: VerificationRun? = null,
+    /** Whether the issue was formally closed/approved after verification. */
+    val closed: Boolean = false
 ) {
     val resolved: Boolean get() = approval == ApprovalState.APPROVED && verification == VerificationState.PASSED && patch != PatchState.FAILED
     val resolvedOnDemoEvidence: Boolean get() = resolved && lastRun?.sources?.contains(ResultSource.DEMO_FIXTURE) == true
 
     fun statusLabel(): String = when {
+        closed && resolved -> if (resolvedOnDemoEvidence) "Closed \u00B7 Resolved (demo data)" else "Closed \u00B7 Resolved"
+        closed -> "Closed \u00B7 Unresolved"
         resolved -> if (resolvedOnDemoEvidence) "Resolved (demo data)" else "Resolved"
         approval == ApprovalState.REJECTED -> "Proposal rejected"
         approval == ApprovalState.AWAITING_APPROVAL -> "Repair proposed \u00B7 Awaiting approval"
@@ -103,7 +107,7 @@ class WorkflowStore(
         if (st.approval != ApprovalState.AWAITING_APPROVAL || st.proposal == null) { message = "There is no proposal awaiting approval for $id."; changed(); return false }
         val patch = st.proposal?.patch
         val hasAutomaticPatch = patch != null
-        update(id) { it.copy(approval = ApprovalState.APPROVED, verification = VerificationState.NOT_RUN, lastRun = null, manualResolution = manualResolution) }
+        update(id) { it.copy(approval = ApprovalState.APPROVED, verification = VerificationState.NOT_RUN, lastRun = null, manualResolution = manualResolution, closed = false) }
 
         // Apply the patch automatically when one exists
         if (hasAutomaticPatch) {
@@ -202,6 +206,80 @@ class WorkflowStore(
         selectedId = id; stage = Stage.VERIFY
         message = "Verification ${verdict.name.lowercase().replace('_', ' ')}: ${summary.passed} passed, ${summary.failed} failed, ${summary.inconclusive} inconclusive, ${summary.notRun} not run of ${summary.total}."
         changed(); return run
+    }
+
+    /** Actionable diagnoses derived from the most recent verification run. Empty if nothing failed. */
+    fun unresolvedIssues(id: String): List<UnresolvedIssue> =
+        state(id).lastRun?.let { VerificationDiagnosis.of(it) } ?: emptyList()
+
+    /** True if the most recent run passed every case (no fails, no inconclusive, no not-run). */
+    fun verificationPassed(id: String): Boolean = state(id).lastRun?.verdict == Verdict.PASSED
+
+    /** Number of cases in the current finding's verification matrix. */
+    fun matrixSize(id: String): Int = finding(id)?.let { VerificationMatrix.cases(it).size } ?: 0
+
+    /**
+     * Formally closes/approves an issue after verification. Requires the repair to be approved first.
+     * Closing is allowed even when verification failed; the UI must warn the user before calling this.
+     */
+    fun closeIssue(id: String): Boolean {
+        val st = state(id)
+        if (st.approval != ApprovalState.APPROVED) {
+            message = "The repair for $id must be approved before the issue can be closed."
+            changed(); return false
+        }
+        update(id) { it.copy(closed = true) }
+        message = "Issue $id closed and approved" + if (st.verification == VerificationState.PASSED) "." else " despite unresolved verification issues."
+        changed(); return true
+    }
+
+    /** Reopens a closed issue so verification can be rerun after a further fix. */
+    fun reopenIssue(id: String): Boolean {
+        update(id) { it.copy(closed = false) }
+        message = "Issue $id reopened."
+        changed(); return true
+    }
+
+    /**
+     * Generates a repair proposal informed by failing verification cases and navigates to Repair.
+     * The base code fix comes from [ProposalGenerator]; verification details are added so the user
+     * can see exactly which cases motivated the repair. Nothing is written until approval.
+     */
+    fun suggestFixFromVerification(id: String): Boolean {
+        val f = finding(id) ?: return false
+        val issues = unresolvedIssues(id)
+        if (issues.isEmpty()) {
+            message = "There are no unresolved verification issues for $id."
+            changed(); return false
+        }
+        val src = sources.read(f.location.file)
+        if (src == null) {
+            message = "Cannot read ${f.location.file}; no verification-driven proposal generated."
+            changed(); return false
+        }
+        val base = ProposalGenerator.generate(f, src)
+        val enhanced = base.copy(
+            summary = "Fix ${issues.size} failing verification case(s) for '${f.targetName}'",
+            explanation = base.explanation + "\n\nVerification failures that motivated this repair:\n" +
+                issues.joinToString("\n") { "  - ${it.diagnosis}" },
+            rationale = base.rationale + " This repair specifically targets the failing verification cases listed above.",
+            notes = base.notes + listOf(
+                "After applying, run verification again to confirm the ${issues.size} failing case(s) now pass.",
+                "Unresolved cases: " + issues.joinToString(", ") { it.case.key }
+            ),
+            verificationScenarioIds = (base.verificationScenarioIds + issues.map { it.case.key }).distinct()
+        )
+        update(id) {
+            it.copy(
+                proposalState = ProposalState.PROPOSED,
+                approval = ApprovalState.AWAITING_APPROVAL,
+                proposal = enhanced,
+                closed = false
+            )
+        }
+        selectedId = id; stage = Stage.REPAIR
+        message = "Repair proposed for ${f.id} based on ${issues.size} verification failure(s). Review, approve, then rerun verification."
+        changed(); return true
     }
 
     /** Resets workflow state. Source files already modified by the workbench are NOT reverted. */
