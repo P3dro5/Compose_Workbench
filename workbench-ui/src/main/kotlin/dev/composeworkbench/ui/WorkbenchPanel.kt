@@ -411,12 +411,20 @@ class WorkbenchPanel(
                 return@button
             }
             val issues = store.unresolvedIssues(id)
-            val passed = store.verificationPassed(id)
+            val run0 = st.lastRun
+            val sum = run0?.summary
+            // All requirements are met when there is a real run, every individual case
+            // passed, and no unresolved issue remains. Do NOT gate this on the batch
+            // verdict: it can be downgraded (e.g. demo evidence on a real finding)
+            // even though every executed case is PASS. In that situation the user
+            // still sees 28/28 passed, so approval must be automatic.
+            val allCasesPassed = sum != null && sum.total > 0 && sum.passed == sum.total &&
+                sum.failed == 0 && sum.inconclusive == 0 && sum.notRun == 0 && issues.isEmpty()
+            val passed = store.verificationPassed(id) || allCasesPassed
             if (passed) {
                 store.closeIssue(id)
                 return@button
             }
-            val sum = st.lastRun?.summary
             val details = buildString {
                 if (sum == null) append("Verification has not been run for this finding.\n\n")
                 else append("${sum.failed} failed, ${sum.inconclusive} inconclusive, ${sum.notRun} not run out of ${sum.total} cases.\n\n")
@@ -598,7 +606,10 @@ class WorkbenchPanel(
             run0?.results?.forEach { r -> resultsModel.addRow(arrayOf(r.case.findingId, r.case.targetName, "%.1fx".format(java.util.Locale.ROOT, r.case.fontScale), r.case.probe.label, r.points.joinToString("; ") { "(%.0f, %.0f)".format(java.util.Locale.ROOT, it.x, it.y) }.ifEmpty { "-" }, r.status.name, r.expected, r.observed, listOfNotNull(r.evidence.ifBlank { null }, r.error).joinToString(" | "))) }
             val approved = st?.approval == ApprovalState.APPROVED
             val issues = store.selectedId?.let { store.unresolvedIssues(it) } ?: emptyList()
-            val passed = store.selectedId?.let { store.verificationPassed(it) } == true
+            val summary0 = run0?.summary
+            val allCasesPassed = summary0 != null && summary0.total > 0 && summary0.passed == summary0.total &&
+                summary0.failed == 0 && summary0.inconclusive == 0 && summary0.notRun == 0 && issues.isEmpty()
+            val passed = store.selectedId?.let { store.verificationPassed(it) } == true || allCasesPassed
             apply.isEnabled = approved && st.patch != PatchState.APPLIED
             run?.isEnabled = true
             reportFixApplied.isEnabled = approved && st.manualFixApplied != true

@@ -117,5 +117,26 @@ fun registerUiTests(s: Suite) {
         val p = panel(DemoFixtureEngine.Scenario.ALL_PASS); click(p, "btn-to-diagnose"); click(p, "btn-suggest-fix"); click(p, "btn-approve"); click(p, "btn-run-verification")
         expectEq("Close and approve", find(p, "btn-advance-and-approve", JButton::class.java).text)
         expect(!find(p, "btn-fix-verification", JButton::class.java).isEnabled)
+        // Clicking Advance must auto-close with NO warning dialog when every case passed.
+        click(p, "btn-advance-and-approve")
+        expect(label(p, "verify-status").contains("Closed")) { label(p, "verify-status") }
+    }
+    s.test("ui: all cases PASS but verdict downgraded (demo on real finding) still auto-approves without dialog") {
+        val d = tempDir()
+        val src = java.io.File(d, "R.kt")
+        src.writeText("package x\nimport androidx.compose.ui.Modifier\nfun A(){ Box(Modifier.size(24.dp).clickable{}) }\n")
+        var p: WorkbenchPanel? = null
+        onEdt {
+            val findings = SourceAnalyzer.analyze(src.absolutePath, src.readText())
+            p = WorkbenchPanel(WorkbenchStoreHandle(WorkflowStore(findings)), { DemoFixtureEngine(DemoFixtureEngine.Scenario.ALL_PASS) })
+        }
+        val pp = p!!
+        click(pp, "btn-to-diagnose"); click(pp, "btn-suggest-fix"); click(pp, "btn-approve"); click(pp, "btn-run-verification")
+        // Verdict is INCONCLUSIVE (downgraded) but every individual case is PASS and there are no unresolved issues.
+        expect(label(pp, "verify-status").contains("inconclusive")) { label(pp, "verify-status") }
+        expectEq("Close and approve", find(pp, "btn-advance-and-approve", JButton::class.java).text)
+        // In headless mode a modal dialog throws HeadlessException, so this verifies no dialog appeared.
+        click(pp, "btn-advance-and-approve")
+        expect(label(pp, "verify-status").contains("Closed")) { label(pp, "verify-status") }
     }
 }
