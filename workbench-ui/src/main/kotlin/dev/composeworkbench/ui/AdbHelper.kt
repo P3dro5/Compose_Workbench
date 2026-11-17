@@ -73,6 +73,27 @@ object AdbHelper {
         return null
     }
 
+    /**
+     * Gradle arguments for an instrumented test run. When [target] is supplied, the test only
+     * exercises that finding's test tag (and, optionally, one font scale / probe), which makes
+     * "run automatic tests for this specific case" a fast, focused operation. Without a filter
+     * the full matrix runs for all targets.
+     */
+    fun targetedTestArgs(target: String? = null, fontScale: Float? = null, probe: String? = null): List<String> {
+        val args = mutableListOf(":sample-app:connectedDebugAndroidTest")
+        if (!target.isNullOrBlank()) args += "-PcwTarget=$target"
+        if (fontScale != null) args += "-PcwFontScale=${"%.1f".format(java.util.Locale.ROOT, fontScale)}"
+        if (!probe.isNullOrBlank()) args += "-PcwProbe=$probe"
+        return args
+    }
+
+    /** Runs the instrumented test for [target] (or all targets when null) and returns Gradle output. */
+    fun runInstrumentedTest(projectDir: File, target: String? = null, fontScale: Float? = null, probe: String? = null): String {
+        val gradlew = File(projectDir, "gradlew")
+        require(gradlew.isFile) { "gradlew not found in ${projectDir.absolutePath}" }
+        return runCommand(gradlew.absolutePath, *targetedTestArgs(target, fontScale, probe).toTypedArray())
+    }
+
     /** Runs an adb command and returns its stdout. */
     fun runCommand(vararg args: String): String {
         val pb = ProcessBuilder(*args).redirectErrorStream(true)

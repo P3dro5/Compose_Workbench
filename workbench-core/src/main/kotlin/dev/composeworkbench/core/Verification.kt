@@ -131,6 +131,20 @@ data class VerificationRun(
     val timestamp: Long = System.currentTimeMillis()
 ) {
     val sources: Set<ResultSource> get() = results.map { it.source }.toSet()
+
+    /**
+     * True only when every case in the matrix was executed and passed. A batch [verdict] can be
+     * downgraded (for example when demo fixture data is used on a real finding), but the individual
+     * cases still tell us unambiguously whether the tested behaviour passed. This is the single
+     * source of truth used by both the workflow core and the UI when deciding whether an issue can
+     * be closed without a warning.
+     */
+    val allCasesPassed: Boolean get() = summary.total > 0 && results.size == summary.total &&
+        summary.passed == summary.total && summary.failed == 0 && summary.inconclusive == 0 && summary.notRun == 0 &&
+        results.all { it.status == ResultStatus.PASS }
+
+    /** Whether any result came from illustrative demo data rather than a real instrumented test. */
+    val hasDemoEvidence: Boolean get() = sources.contains(ResultSource.DEMO_FIXTURE)
 }
 
 interface VerificationEngine {

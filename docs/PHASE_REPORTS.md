@@ -109,3 +109,40 @@ The Verify stage is now an actionable repair loop, not just a results viewer:
 4. **Close and approve** appears when all 28 cases pass and formally closes the issue (`WorkflowStore.closeIssue`). If cases remain unresolved, **Advance and approve** shows a confirmation dialog with *Accept and approve anyway*, *Cancel*, and *Show unresolved issues*; the last option navigates straight to a verification-driven fix proposal. A closed issue can be reopened to rerun verification after further changes.
 
 New tests cover diagnosis generation, closure/reopen, verification-driven proposals, and the UI buttons (69 tests executed, 69 passed, 0 failed).
+
+---
+
+## Status finalization and target-specific device tests (post-implementation fix)
+
+A status bug remained when a run had a downgraded batch verdict: every individual case could show
+`PASS` while the issue still displayed *Verification inconclusive* and closed as *Unresolved*. The
+root cause was a disagreement between the UI's per-case check and the core's reliance on the batch
+verdict (`Verdict.INCONCLUSIVE` is still recorded honestly when demo fixture data is used on a real
+finding). The core is now the single source of truth:
+
+- `VerificationRun.allCasesPassed` checks that every case was executed and passed.
+- `WorkflowStore.verificationPassed()` and the Verify card both use that check.
+- `IssueState.statusLabel()` reports *Verification passed* (or *Verification passed (demo data)*)
+  instead of *Verification inconclusive* when all cases passed.
+- `WorkflowStore.closeIssue()` promotes the verification axis to `PASSED` for such runs, so
+  closing finalizes as *Closed · Resolved* (or *Closed · Resolved (demo data)*) with no warning
+  dialog and no stale inconclusive/unresolved label.
+
+To proceed from a passing run to real device evidence for the selected finding, the Verify card now
+also offers **Run device tests for this finding**. It:
+
+1. Runs `:sample-app:connectedDebugAndroidTest` with `-PcwTarget=<testTag>` (optionally
+   `-PcwFontScale` / `-PcwProbe`) via `AdbHelper.targetedTestArgs`.
+2. `TouchTargetMatrixTest` forwards those arguments through
+   `testInstrumentationRunnerArguments` in `sample-app/build.gradle.kts` and only executes the
+   matching rows, writing the standard `cw-results.tsv`.
+3. The results are pulled to `<project>/.compose-workbench/results.tsv` and imported with
+   `ResultsFileEngine` — even when the workbench is open in demo mode — so real instrumented
+   results, not scripted data, drive the final status.
+
+The full-matrix **Run verification** button follows the same pull-and-import path. The instrumented
+test source now compiles (`:sample-app:compileDebugAndroidTestKotlin` passes); running it still
+requires a connected emulator or physical device (`adb devices` must list one).
+
+Regression coverage was added for all-pass closure, downgraded-verdict status, real results import,
+and the filtered Gradle arguments. Full suite: **74 tests executed, 74 passed, 0 failed**.

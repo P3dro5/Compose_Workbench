@@ -319,6 +319,80 @@ class WorkbenchPanel(
         val engineLabel = JLabel(" ").apply { name = "verify-engine" }
         val historyLabel = JLabel(" ").apply { name = "verify-history" }
         var run: JButton? = null
+        var targetedButton: JButton? = null
+
+        /** Single source of truth for "all requirements met", shared with the workflow core. */
+        private fun allRequirementsMet(id: String): Boolean =
+            store.verificationPassed(id) && store.unresolvedIssues(id).isEmpty()
+
+        /**
+         * Runs instrumented tests on a connected device/emulator, pulls the produced TSV and
+         * imports it as the verification evidence for [id]. [target] restricts the run to a single
+         * finding's test tag; null runs the full matrix for every target.
+         */
+        private fun executeDeviceTest(id: String, target: String?) {
+            val projectDir = this@WorkbenchPanel.projectDir
+            val gradlew = File(projectDir, "gradlew")
+            if (!gradlew.isFile) {
+                JOptionPane.showMessageDialog(
+                    this@VerifyCard,
+                    "gradlew not found in ${projectDir.absolutePath}.\nRun the instrumented test manually.",
+                    "Missing gradlew",
+                    JOptionPane.WARNING_MESSAGE
+                )
+                return
+            }
+            run?.isEnabled = false
+            targetedButton?.isEnabled = false
+            messageLabel.text = "Running instrumented test on device..."
+            Thread {
+                try {
+                    val args = AdbHelper.targetedTestArgs(target)
+                    SwingUtilities.invokeLater { messageLabel.text = "Running ./gradlew ${args.joinToString(" ")}" }
+                    val gradleOutput = AdbHelper.runInstrumentedTest(projectDir, target)
+                    SwingUtilities.invokeLater { messageLabel.text = gradleOutput.takeLast(300) }
+                    SwingUtilities.invokeLater { messageLabel.text = "Pulling results from device..." }
+                    val pulled = AdbHelper.pullResultsFromDevice(projectDir)
+                    if (pulled == null) {
+                        SwingUtilities.invokeLater {
+                            messageLabel.text = "ERROR: Could not retrieve results from device."
+                            run?.isEnabled = true; targetedButton?.isEnabled = true
+                        }
+                        JOptionPane.showMessageDialog(
+                            this@VerifyCard,
+                            "Could not retrieve results from device.\nMake sure the instrumented test ran successfully.",
+                            "No Results",
+                            JOptionPane.WARNING_MESSAGE
+                        )
+                        return@Thread
+                    }
+                    SwingUtilities.invokeLater { messageLabel.text = "Results retrieved: $pulled" }
+                    SwingUtilities.invokeLater {
+                        // Device results, not demo/scripted data, become the verification evidence.
+                        store.runVerification(id, ResultsFileEngine(File(pulled)))
+                        JOptionPane.showMessageDialog(
+                            this@VerifyCard,
+                            "Automatic tests completed for ${target ?: "all targets"}.\nResults were imported from $pulled.",
+                            "Verification Complete",
+                            JOptionPane.INFORMATION_MESSAGE
+                        )
+                        run?.isEnabled = true; targetedButton?.isEnabled = true
+                    }
+                } catch (e: Exception) {
+                    SwingUtilities.invokeLater {
+                        messageLabel.text = "Verification failed: ${e.message}"
+                        run?.isEnabled = true; targetedButton?.isEnabled = true
+                    }
+                    JOptionPane.showMessageDialog(
+                        this@VerifyCard,
+                        "Verification failed: ${e.message}",
+                        "Verification Error",
+                        JOptionPane.ERROR_MESSAGE
+                    )
+                }
+            }.start()
+        }
+
         val overview = object : DefaultTableModel(arrayOf("ID", "Status", "Patch"), 0) { override fun isCellEditable(r: Int, c: Int) = false }
         val overviewTable = JTable(overview).apply { name = "verify-overview" }
         val resultsModel = object : DefaultTableModel(arrayOf("Finding", "Target", "Font scale", "Probe", "Points (root px)", "Status", "Expected", "Observed", "Evidence / error"), 0) { override fun isCellEditable(r: Int, c: Int) = false }
@@ -390,6 +464,33 @@ class WorkbenchPanel(
             val id = store.selectedId ?: return@button
             store.runVerification(id, DemoFixtureEngine(DemoFixtureEngine.Scenario.ALL_PASS))
         }
+        val runTargeted = button("Run device tests for this finding", "btn-run-targeted-test") {
+            val id = store.selectedId ?: return@button
+            val target = store.selected?.targetName
+            if (target.isNullOrBlank()) {
+                JOptionPane.showMessageDialog(this, "Select a finding with a concrete UI target first.", "No Target", JOptionPane.WARNING_MESSAGE)
+                return@button
+            }
+            if (AdbHelper.adbPath == null || !AdbHelper.hasConnectedDevice()) {
+                JOptionPane.showMessageDialog(
+                    this,
+                    "No Android device/emulator connected via adb.\n" +
+                        "Connect one and try again. The run will execute the automatic touch-target tests for '$target' and import their results.",
+                    "No Device",
+                    JOptionPane.WARNING_MESSAGE
+                )
+                return@button
+            }
+            val confirm = JOptionPane.showConfirmDialog(
+                this,
+                "Run automatic touch-target tests for '$target' on the connected device/emulator?\n" +
+                    "Only this finding's matrix will run; results are imported automatically.",
+                "Run device tests for this finding",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.QUESTION_MESSAGE
+            )
+            if (confirm == JOptionPane.YES_OPTION) executeDeviceTest(id, target)
+        }
         val review = button("Review findings", "btn-review-findings") { store.goTo(Stage.DIAGNOSE) }
         val fixFailures = button("Fix verification failures", "btn-fix-verification") {
             store.selectedId?.let { store.suggestFixFromVerification(it) }
@@ -413,14 +514,10 @@ class WorkbenchPanel(
             val issues = store.unresolvedIssues(id)
             val run0 = st.lastRun
             val sum = run0?.summary
-            // All requirements are met when there is a real run, every individual case
-            // passed, and no unresolved issue remains. Do NOT gate this on the batch
-            // verdict: it can be downgraded (e.g. demo evidence on a real finding)
-            // even though every executed case is PASS. In that situation the user
-            // still sees 28/28 passed, so approval must be automatic.
-            val allCasesPassed = sum != null && sum.total > 0 && sum.passed == sum.total &&
-                sum.failed == 0 && sum.inconclusive == 0 && sum.notRun == 0 && issues.isEmpty()
-            val passed = store.verificationPassed(id) || allCasesPassed
+            // Core and UI now share the same check: every individual case PASS and no
+            // unresolved issue. The batch verdict may be downgraded for evidence-quality
+            // reasons, but it must not block closure when the user sees 28/28 passed.
+            val passed = allRequirementsMet(id)
             if (passed) {
                 store.closeIssue(id)
                 return@button
@@ -476,10 +573,10 @@ class WorkbenchPanel(
             border = BorderFactory.createTitledBorder("How to get verification results")
             val instructions = JTextArea(
                 "Verification runs the instrumented test on a connected device/emulator and reports the exact cases that failed.\n\n" +
-                "Step 1: Connect a device/emulator, then click 'Run verification' above.\n" +
-                "        The test runs, results are saved to .compose-workbench/results.tsv, and failures are diagnosed.\n\n" +
-                "Step 2: If cases fail, click 'Fix verification failures' to review a proposed fix, approve it, then run verification again.\n\n" +
-                "Step 3: When all cases pass, click 'Close and approve'. You may still advance with unresolved issues via a confirmation dialog.\n\n" +
+                "Step 1: Connect a device/emulator. Click 'Run device tests for this finding' to run the automatic tests for only the selected finding, or 'Run verification' for the full matrix.\n" +
+                "        Results are saved to .compose-workbench/results.tsv, imported automatically, and failures are diagnosed.\n\n" +
+                "Step 2: If cases fail, click 'Fix verification failures' to review a proposed fix, approve it, then run the device tests again.\n\n" +
+                "Step 3: When all cases pass, click 'Close and approve' - the issue finalizes as Resolved with no warning. You may still advance with unresolved issues via a confirmation dialog.\n\n" +
                 "No device? Click 'Pull results from device' (adb) or 'Run demo verification' (test data only)."
             ).apply {
                 isEditable = false
@@ -489,6 +586,7 @@ class WorkbenchPanel(
                 font = font.deriveFont(Font.PLAIN, 12f)
             }
             val btnPanel = JPanel(FlowLayout(FlowLayout.LEFT)).apply {
+                add(runTargeted)
                 add(pullFromDevice)
                 add(runDemo)
             }
@@ -500,6 +598,7 @@ class WorkbenchPanel(
 
         init {
             name = "card-VERIFY"; border = BorderFactory.createEmptyBorder(8, 8, 8, 8)
+            targetedButton = runTargeted
             val north = JPanel(GridLayout(0, 1)).apply { add(header); add(status); add(patchStatus); add(summary); add(engineLabel); add(historyLabel) }
             add(north, BorderLayout.NORTH)
             add(centerPanel, BorderLayout.CENTER)
@@ -509,84 +608,24 @@ class WorkbenchPanel(
 
             run = button("Run verification", "btn-run-verification") {
                 val id = store.selectedId ?: return@button
-                val projectDir = this@WorkbenchPanel.projectDir
-                val adb = AdbHelper.adbPath
-                val hasDevice = adb != null && AdbHelper.hasConnectedDevice()
-                if (!hasDevice) {
-                    // No device available - proceed with unavailable engine
+                if (AdbHelper.adbPath == null || !AdbHelper.hasConnectedDevice()) {
+                    // No device available - use the configured engine (demo fixture or unavailable).
                     store.runVerification(id, engineFactory())
-                    return@button
-                }
-                val gradlew = File(projectDir, "gradlew")
-                if (!gradlew.isFile) {
-                    JOptionPane.showMessageDialog(
-                        this,
-                        "gradlew not found in project directory.\n" +
-                            "Run: ./gradlew :sample-app:connectedDebugAndroidTest manually",
-                        "Missing gradlew",
-                        JOptionPane.WARNING_MESSAGE
-                    )
                     return@button
                 }
                 val confirm = JOptionPane.showConfirmDialog(
                     this,
-                    "This will run the instrumented touch-target matrix test on the connected device.\n" +
+                    "This will run the full instrumented touch-target matrix test on the connected device.\n" +
                         "This may take a few minutes. Continue?",
                     "Run Instrumented Test",
                     JOptionPane.YES_NO_OPTION,
                     JOptionPane.QUESTION_MESSAGE
                 )
                 if (confirm != JOptionPane.YES_OPTION) return@button
-                run?.isEnabled = false
-                messageLabel.text = "Running instrumented test on device..."
-                Thread {
-                    try {
-                        SwingUtilities.invokeLater { messageLabel.text = "Running ./gradlew :sample-app:connectedDebugAndroidTest..." }
-                        val gradleOutput = AdbHelper.runCommand(gradlew.absolutePath, ":sample-app:connectedDebugAndroidTest")
-                        SwingUtilities.invokeLater { messageLabel.text = gradleOutput.takeLast(300) }
-                        SwingUtilities.invokeLater { messageLabel.text = "Pulling results from device..." }
-                        val pulled = AdbHelper.pullResultsFromDevice(projectDir)
-                        if (pulled == null) {
-                            SwingUtilities.invokeLater {
-                                messageLabel.text = "ERROR: Could not retrieve results from device."
-                                run?.isEnabled = true
-                            }
-                            JOptionPane.showMessageDialog(
-                                this@VerifyCard,
-                                "Could not retrieve results from device.\n" +
-                                    "Make sure the instrumented test ran successfully.",
-                                "No Results",
-                                JOptionPane.WARNING_MESSAGE
-                            )
-                            return@Thread
-                        }
-                        SwingUtilities.invokeLater { messageLabel.text = "Results retrieved: $pulled" }
-                        SwingUtilities.invokeLater {
-                            store.runVerification(id, engineFactory())
-                            JOptionPane.showMessageDialog(
-                                this@VerifyCard,
-                                "Verification complete! Check the results table above.",
-                                "Verification Complete",
-                                JOptionPane.INFORMATION_MESSAGE
-                            )
-                            run?.isEnabled = true
-                        }
-                    } catch (e: Exception) {
-                        SwingUtilities.invokeLater {
-                            messageLabel.text = "Verification failed: ${e.message}"
-                            run?.isEnabled = true
-                        }
-                        JOptionPane.showMessageDialog(
-                            this@VerifyCard,
-                            "Verification failed: ${e.message}",
-                            "Verification Error",
-                            JOptionPane.ERROR_MESSAGE
-                        )
-                    }
-                }.start()
+                executeDeviceTest(id, null)
             }
 
-            add(JPanel(FlowLayout(FlowLayout.RIGHT)).apply { add(review); add(fixFailures); add(advance); add(reset); add(apply); add(run); add(reportFixApplied); add(reportFixIssue) }, BorderLayout.SOUTH)
+            add(JPanel(FlowLayout(FlowLayout.RIGHT)).apply { add(review); add(fixFailures); add(advance); add(reset); add(apply); add(runTargeted); add(run); add(reportFixApplied); add(reportFixIssue) }, BorderLayout.SOUTH)
         }
 
         fun update() {
@@ -606,12 +645,11 @@ class WorkbenchPanel(
             run0?.results?.forEach { r -> resultsModel.addRow(arrayOf(r.case.findingId, r.case.targetName, "%.1fx".format(java.util.Locale.ROOT, r.case.fontScale), r.case.probe.label, r.points.joinToString("; ") { "(%.0f, %.0f)".format(java.util.Locale.ROOT, it.x, it.y) }.ifEmpty { "-" }, r.status.name, r.expected, r.observed, listOfNotNull(r.evidence.ifBlank { null }, r.error).joinToString(" | "))) }
             val approved = st?.approval == ApprovalState.APPROVED
             val issues = store.selectedId?.let { store.unresolvedIssues(it) } ?: emptyList()
-            val summary0 = run0?.summary
-            val allCasesPassed = summary0 != null && summary0.total > 0 && summary0.passed == summary0.total &&
-                summary0.failed == 0 && summary0.inconclusive == 0 && summary0.notRun == 0 && issues.isEmpty()
-            val passed = store.selectedId?.let { store.verificationPassed(it) } == true || allCasesPassed
+            val passed = store.selectedId?.let { allRequirementsMet(it) } == true
             apply.isEnabled = approved && st.patch != PatchState.APPLIED
             run?.isEnabled = true
+            targetedButton?.isEnabled = f != null && f.targetName.isNotBlank()
+            targetedButton?.toolTipText = if (f == null) "Select a finding first." else "Run automatic device/emulator tests for target '${f.targetName}' only."
             reportFixApplied.isEnabled = approved && st.manualFixApplied != true
             reportFixIssue.isEnabled = approved && st.manualFixApplied == true
             fixFailures.isEnabled = issues.isNotEmpty()

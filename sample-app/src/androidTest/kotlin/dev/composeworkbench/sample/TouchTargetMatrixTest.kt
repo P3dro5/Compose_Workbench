@@ -37,6 +37,17 @@ class TouchTargetMatrixTest {
 
     private val scales = listOf(1.0f, 1.3f, 1.5f, 2.0f)
     private val probes = listOf("CENTER", "TOP_EDGE", "BOTTOM_EDGE", "LEFT_EDGE", "RIGHT_EDGE", "CORNERS", "OUTSIDE")
+
+    // Optional filters forwarded from the workbench via -PcwTarget / -PcwFontScale / -PcwProbe.
+    // No filter => the full matrix runs for every target (backwards compatible).
+    private val args = InstrumentationRegistry.getArguments()
+    private val targetFilter = args.getString("cwTarget")?.takeIf { it.isNotBlank() }
+    private val scaleFilter = args.getString("cwFontScale")?.toFloatOrNull()
+    private val probeFilter = args.getString("cwProbe")?.takeIf { it.isNotBlank() }?.uppercase(Locale.ROOT)
+    private val targetsToRun = targetFilter?.let { listOf(it) } ?: listOf("favorite", "share")
+    private val scalesToRun = scaleFilter?.let { listOf(it) } ?: scales
+    private val probesToRun = probeFilter?.let { listOf(it) } ?: probes
+
     private var favoriteClicks = 0
     private var shareClicks = 0
 
@@ -65,10 +76,11 @@ class TouchTargetMatrixTest {
             }
         }
         val rows = StringBuilder("# target\tfontScale\tprobe\tpoints\texpected\tobserved\tstatus\tevidence\terror\n")
-        for (target in listOf("favorite", "share")) for (s in scales) {
+        rows.append("# filter: target=${targetFilter ?: "all"}, fontScale=${scaleFilter ?: "all"}, probe=${probeFilter ?: "all"}\n")
+        for (target in targetsToRun) for (s in scalesToRun) {
             scale.value = s; rule.waitForIdle()
             val b = try { rule.onNodeWithTag(target).fetchSemanticsNode().boundsInRoot } catch (e: Throwable) { null }
-            for (probe in probes) {
+            for (probe in probesToRun) {
                 val negative = probe == "OUTSIDE"
                 val expected = if (negative) "tap outside '$target' must NOT trigger its click action" else "tap on '$target' ($probe) triggers its click action"
                 val key = String.format(Locale.ROOT, "%.1f", s)
@@ -82,7 +94,8 @@ class TouchTargetMatrixTest {
                 catch (e: Throwable) { error = clean(e.toString()) }
                 val ptsText = pts.joinToString(";") { "${it.x},${it.y}" }
                 val observed = "target clicks=${own()}, other target clicks=${other()}"
-                val ev = "boundsInRoot=${b.left},${b.top},${b.right},${b.bottom} px; density=${rule.activity.resources.displayMetrics.density}"
+                val density = InstrumentationRegistry.getInstrumentation().targetContext.resources.displayMetrics.density
+                val ev = "boundsInRoot=${b.left},${b.top},${b.right},${b.bottom} px; density=$density"
                 val status = when {
                     error != null -> "INCONCLUSIVE"
                     negative -> if (own() == 0) "PASS" else "FAIL"

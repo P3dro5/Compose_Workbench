@@ -28,7 +28,7 @@ fun registerUiTests(s: Suite) {
         val texts = all(p.verifyCard).mapNotNull { (it as? javax.swing.AbstractButton)?.text ?: (it as? JLabel)?.text }
         expect(texts.none { it.contains("Back to Repair", ignoreCase = true) }) { "found: $texts" }
         expect(all(p.verifyCard).filterIsInstance<JButton>().none { it.text.contains("Repair", ignoreCase = true) && it.text.contains("Back", ignoreCase = true) })
-        expectEq(listOf("Advance and approve", "Apply approved patch", "Fix verification failures", "Pull results from device", "Report fix applied", "Report fix issue", "Reset workflow", "Review findings", "Run demo verification", "Run verification").sorted(), all(p.verifyCard).filterIsInstance<JButton>().filter { it.name?.startsWith("btn-") == true }.map { it.text }.sorted())
+        expectEq(listOf("Advance and approve", "Apply approved patch", "Fix verification failures", "Pull results from device", "Report fix applied", "Report fix issue", "Reset workflow", "Review findings", "Run demo verification", "Run device tests for this finding", "Run verification").sorted(), all(p.verifyCard).filterIsInstance<JButton>().filter { it.name?.startsWith("btn-") == true }.map { it.text }.sorted())
     }
     s.test("ui: stage indicator stages are clickable buttons") {
         val p = panel(); Stage.values().forEach { 
@@ -121,7 +121,7 @@ fun registerUiTests(s: Suite) {
         click(p, "btn-advance-and-approve")
         expect(label(p, "verify-status").contains("Closed")) { label(p, "verify-status") }
     }
-    s.test("ui: all cases PASS but verdict downgraded (demo on real finding) still auto-approves without dialog") {
+    s.test("ui: all cases PASS but verdict downgraded (demo on real finding) shows passed, closes as Resolved, no dialog") {
         val d = tempDir()
         val src = java.io.File(d, "R.kt")
         src.writeText("package x\nimport androidx.compose.ui.Modifier\nfun A(){ Box(Modifier.size(24.dp).clickable{}) }\n")
@@ -132,11 +132,50 @@ fun registerUiTests(s: Suite) {
         }
         val pp = p!!
         click(pp, "btn-to-diagnose"); click(pp, "btn-suggest-fix"); click(pp, "btn-approve"); click(pp, "btn-run-verification")
-        // Verdict is INCONCLUSIVE (downgraded) but every individual case is PASS and there are no unresolved issues.
-        expect(label(pp, "verify-status").contains("inconclusive")) { label(pp, "verify-status") }
+        // Verdict is INCONCLUSIVE (downgraded) but every individual case is PASS and there are no
+        // unresolved issues. The status must reflect the passed cases, not the downgraded verdict.
+        expect(label(pp, "verify-status").contains("Verification passed (demo data)")) { label(pp, "verify-status") }
+        expect(!label(pp, "verify-status").contains("inconclusive")) { label(pp, "verify-status") }
         expectEq("Close and approve", find(pp, "btn-advance-and-approve", JButton::class.java).text)
         // In headless mode a modal dialog throws HeadlessException, so this verifies no dialog appeared.
         click(pp, "btn-advance-and-approve")
-        expect(label(pp, "verify-status").contains("Closed")) { label(pp, "verify-status") }
+        expectEq("Status: Closed \u00B7 Resolved (demo data)", label(pp, "verify-status"), "verify status")
+    }
+
+    s.test("ui: real instrumented all-pass results close as Closed Resolved with no inconclusive status") {
+        val d = tempDir()
+        val src = java.io.File(d, "R.kt")
+        src.writeText("package x\nimport androidx.compose.ui.Modifier\nfun A(){ Box(Modifier.size(24.dp).clickable{}) }\n")
+        val findings = SourceAnalyzer.analyze(src.absolutePath, src.readText())
+        val f = findings.first { it.kind == FindingKind.SMALL_TOUCH_TARGET }
+        val results = java.io.File(d, ".compose-workbench/results.tsv").apply { parentFile.mkdirs() }
+        results.writeText(buildString {
+            append("# target\tfontScale\tprobe\tpoints\texpected\tobserved\tstatus\tevidence\terror\n")
+            VerificationMatrix.cases(f).forEach { c ->
+                append(listOf(c.targetName, "%.1f".format(java.util.Locale.ROOT, c.fontScale), c.probe.name, "10,20",
+                    VerificationMatrix.expectedFor(c), "real click observed", "PASS", "boundsInRoot=10,20,80,90 px", "").joinToString("\t"))
+                append("\n")
+            }
+        })
+        var p: WorkbenchPanel? = null
+        onEdt { p = WorkbenchPanel(WorkbenchStoreHandle(WorkflowStore(findings)), { ResultsFileEngine(results) }) }
+        val pp = p!!
+        click(pp, "btn-to-diagnose"); click(pp, "btn-suggest-fix"); click(pp, "btn-approve"); click(pp, "btn-run-verification")
+        expect(label(pp, "verify-status").contains("Resolved")) { label(pp, "verify-status") }
+        expect(label(pp, "verify-engine").contains("Instrumented test results")) { label(pp, "verify-engine") }
+        expectEq("Close and approve", find(pp, "btn-advance-and-approve", JButton::class.java).text)
+        click(pp, "btn-advance-and-approve")
+        expectEq("Status: Closed \u00B7 Resolved", label(pp, "verify-status"), "verify status")
+        expect(!label(pp, "verify-status").contains("inconclusive") && !label(pp, "verify-status").contains("Unresolved")) { label(pp, "verify-status") }
+    }
+
+    s.test("ui: target-specific device test control exists and builds filtered Gradle arguments") {
+        val p = panel()
+        val btn = find(p, "btn-run-targeted-test", JButton::class.java)
+        expect(btn.isEnabled) { "targeted device test button disabled" }
+        expect(btn.toolTipText.contains("target", ignoreCase = true)) { btn.toolTipText }
+        expectEq(listOf(":sample-app:connectedDebugAndroidTest", "-PcwTarget=favorite", "-PcwFontScale=1.5", "-PcwProbe=RIGHT_EDGE"),
+            AdbHelper.targetedTestArgs("favorite", 1.5f, "RIGHT_EDGE"))
+        expectEq(listOf(":sample-app:connectedDebugAndroidTest"), AdbHelper.targetedTestArgs())
     }
 }

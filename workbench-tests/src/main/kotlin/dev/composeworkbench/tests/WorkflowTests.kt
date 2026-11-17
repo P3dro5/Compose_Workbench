@@ -165,6 +165,46 @@ fun registerWorkflowTests(s: Suite) {
         expect(x.store.closeIssue(x.id1))
         expect(x.store.state(x.id1).statusLabel().contains("Closed") && x.store.state(x.id1).statusLabel().contains("Unresolved"))
     }
+    s.test("closure: all cases PASS with downgraded batch verdict finalizes as Resolved (demo data), never inconclusive") {
+        val d = tempDir(); val src = File(d, "R.kt")
+        src.writeText("package x\nimport androidx.compose.ui.Modifier\nfun A(){ Box(Modifier.size(24.dp).clickable{}) }\n")
+        val findings = SourceAnalyzer.analyze(src.absolutePath, src.readText())
+        val store = WorkflowStore(findings); val id = findings.first { it.kind == FindingKind.SMALL_TOUCH_TARGET }.id
+        store.suggestFix(id); store.approve(id)
+        val run = store.runVerification(id, DemoFixtureEngine(DemoFixtureEngine.Scenario.ALL_PASS))!!
+        // The batch verdict is still honestly downgraded because demo data cannot verify a real finding.
+        expectEq(Verdict.INCONCLUSIVE, run.verdict)
+        expect(run.allCasesPassed)
+        expect(store.verificationPassed(id))
+        val before = store.state(id).statusLabel()
+        expect(before.contains("Verification passed (demo data)")) { before }
+        expect(!before.contains("inconclusive")) { before }
+        expect(store.closeIssue(id))
+        val after = store.state(id).statusLabel()
+        expect(after.contains("Closed") && after.contains("Resolved (demo data)")) { after }
+        expect(!after.contains("inconclusive") && !after.contains("Unresolved")) { after }
+        expectEq(VerificationState.PASSED, store.state(id).verification)
+    }
+    s.test("closure: real instrumented all-pass results close as Closed Resolved without demo qualifier") {
+        val x = Fixture(); val f = x.findings[0]; val id = f.id
+        x.store.suggestFix(id); x.store.approve(id)
+        val results = File(x.dir, "results.tsv")
+        results.writeText(buildString {
+            append("# target\tfontScale\tprobe\tpoints\texpected\tobserved\tstatus\tevidence\terror\n")
+            VerificationMatrix.cases(f).forEach { c ->
+                append(listOf(c.targetName, "%.1f".format(java.util.Locale.ROOT, c.fontScale), c.probe.name, "10,20",
+                    VerificationMatrix.expectedFor(c), "real click observed", "PASS", "boundsInRoot=10,20,80,90 px", "").joinToString("\t"))
+                append("\n")
+            }
+        })
+        val run = x.store.runVerification(id, ResultsFileEngine(results))!!
+        expectEq(Verdict.PASSED, run.verdict); expectEq(ResultSource.INSTRUMENTED, run.sources.single())
+        expect(!run.hasDemoEvidence); expect(x.store.verificationPassed(id))
+        expectEq("Resolved", x.store.state(id).statusLabel())
+        expect(x.store.closeIssue(id))
+        val label = x.store.state(id).statusLabel()
+        expect(label.contains("Closed") && label.contains("Resolved") && !label.contains("demo")) { label }
+    }
     s.test("verification-driven fix: proposal from failures navigates to Repair without writing source") {
         val x = Fixture(); x.store.suggestFix(x.id1); x.store.approve(x.id1)
         x.store.runVerification(x.id1, DemoFixtureEngine(DemoFixtureEngine.Scenario.ILLUSTRATED_FAILURES))

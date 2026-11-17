@@ -11,7 +11,16 @@ repositories {
 android {
     namespace = "dev.composeworkbench.sample"
     compileSdk = 35
-    defaultConfig { applicationId = "dev.composeworkbench.sample"; minSdk = 24; targetSdk = 35; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
+    defaultConfig {
+        applicationId = "dev.composeworkbench.sample"; minSdk = 24; targetSdk = 35
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // Forward -PcwTarget / -PcwFontScale / -PcwProbe so the workbench can run the
+        // instrumented tests for a single finding or a single matrix case. Empty values
+        // mean "no filter" and preserve the full matrix behaviour.
+        testInstrumentationRunnerArguments["cwTarget"] = (project.findProperty("cwTarget") as? String).orEmpty()
+        testInstrumentationRunnerArguments["cwFontScale"] = (project.findProperty("cwFontScale") as? String).orEmpty()
+        testInstrumentationRunnerArguments["cwProbe"] = (project.findProperty("cwProbe") as? String).orEmpty()
+    }
     sourceSets["main"].java.srcDir("src/main/kotlin")
     sourceSets["androidTest"].java.srcDir("src/androidTest/kotlin")
     buildFeatures { compose = true }

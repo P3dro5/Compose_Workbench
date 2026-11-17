@@ -41,6 +41,9 @@ data class IssueState(
         approval == ApprovalState.REJECTED -> "Proposal rejected"
         approval == ApprovalState.AWAITING_APPROVAL -> "Repair proposed \u00B7 Awaiting approval"
         approval == ApprovalState.APPROVED -> when {
+            // A downgraded batch verdict must not hide the fact that every case passed.
+            lastRun?.allCasesPassed == true ->
+                if (lastRun.hasDemoEvidence) "Verification passed (demo data)" else "Verification passed"
             verification == VerificationState.FAILED -> "Verification failed"
             verification == VerificationState.INCONCLUSIVE -> "Verification inconclusive"
             verification == VerificationState.PASSED -> "Verification passed"
@@ -212,8 +215,14 @@ class WorkflowStore(
     fun unresolvedIssues(id: String): List<UnresolvedIssue> =
         state(id).lastRun?.let { VerificationDiagnosis.of(it) } ?: emptyList()
 
-    /** True if the most recent run passed every case (no fails, no inconclusive, no not-run). */
-    fun verificationPassed(id: String): Boolean = state(id).lastRun?.verdict == Verdict.PASSED
+    /**
+     * True if the most recent run passed every individual case (no fails, no inconclusive, no
+     * not-run). This intentionally does not rely on the batch verdict: that verdict can be
+     * downgraded for evidence-quality reasons (e.g. demo fixture data on a real finding) even
+     * when every executed case passed. Keeping this check in the core prevents the UI and the
+     * workflow state from disagreeing about whether an issue may be closed.
+     */
+    fun verificationPassed(id: String): Boolean = state(id).lastRun?.allCasesPassed == true
 
     /** Number of cases in the current finding's verification matrix. */
     fun matrixSize(id: String): Int = finding(id)?.let { VerificationMatrix.cases(it).size } ?: 0
@@ -228,8 +237,22 @@ class WorkflowStore(
             message = "The repair for $id must be approved before the issue can be closed."
             changed(); return false
         }
-        update(id) { it.copy(closed = true) }
-        message = "Issue $id closed and approved" + if (st.verification == VerificationState.PASSED) "." else " despite unresolved verification issues."
+        // Reconcile the stored verification axis with the individual case results. A run can have a
+        // downgraded batch verdict (e.g. demo evidence on a real finding) while every case passed;
+        // closing such a run must finalize as resolved, not leave a stale "inconclusive" status.
+        val allPassed = verificationPassed(id)
+        val demoEvidence = st.lastRun?.hasDemoEvidence == true
+        update(id) {
+            it.copy(
+                closed = true,
+                verification = if (allPassed) VerificationState.PASSED else it.verification
+            )
+        }
+        message = "Issue $id closed and approved" + when {
+            allPassed && demoEvidence -> " (reported as resolved using demo data; rerun on a device for real verification)."
+            allPassed -> "."
+            else -> " despite unresolved verification issues."
+        }
         changed(); return true
     }
 
