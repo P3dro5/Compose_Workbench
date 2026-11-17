@@ -586,7 +586,6 @@ class WorkbenchPanel(
                 font = font.deriveFont(Font.PLAIN, 12f)
             }
             val btnPanel = JPanel(FlowLayout(FlowLayout.LEFT)).apply {
-                add(runTargeted)
                 add(pullFromDevice)
                 add(runDemo)
             }
